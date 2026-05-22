@@ -1,39 +1,19 @@
-# Granite 4.1 8B — MLX Quantization Benchmark
+# mlx-bench
 
-Rigorous quantization benchmarks for IBM's [Granite 4.1 8B](https://huggingface.co/ibm-granite/granite-4.1-8b) on Apple Silicon using the [MLX](https://github.com/ml-explore/mlx) framework.
+A reproducible benchmarking pipeline for **MLX-quantized LLMs** on Apple Silicon.
 
-**Goal**: Understand the quality vs. speed vs. memory tradeoff across every quantization variant available in mlx-lm — so you can pick the right variant for your use case.
+Quantize any HuggingFace LLM that [mlx-lm](https://github.com/ml-explore/mlx-lm) supports into every available variant (4/5/6/8-bit affine, mixed-bit, block-float MX FP4/FP8), then measure performance **and** quality side-by-side in a single pass — so you can pick the right variant for your use case.
 
-**Hardware**: Apple M5 Pro  
 **Runtime**: MLX + mlx-lm  
-**Base model**: `ibm-granite/granite-4.1-8b` (Apache 2.0)
+**Hardware**: Any Apple Silicon Mac (M1 or later)
 
 ---
 
-## Quantization Variants
+## What gets measured
 
-| Model | Method | Bits/weight | Disk |
-|---|---|---|---|
-| `granite-4.1-8b-fp16` | Baseline (BF16) | 16 | ~17.6 GB |
-| `granite-4.1-8b-8bit` | Affine int8 | ~8.5 | ~8.5 GB |
-| `granite-4.1-8b-6bit` | Affine int6 | ~6.5 | ~6.5 GB |
-| `granite-4.1-8b-5bit` | Affine int5 | ~5.5 | ~5.5 GB |
-| `granite-4.1-8b-4bit` | Affine int4 | ~4.5 | ~4.5 GB |
-| `granite-4.1-8b-mixed4_6` | Mixed 4+6 bit (sensitive layers at 6-bit) | ~4.77 | ~4.8 GB |
-| `granite-4.1-8b-mxfp4` | Block float MX FP4 | ~4 | ~4 GB |
-| `granite-4.1-8b-mxfp8` | Block float MX FP8 | ~8 | ~8 GB |
+For each model variant, in a single load:
 
-**Affine**: Standard integer quantization (what most tools use by default).  
-**Mixed-bit**: Sensitive layers (embeddings, first/last layers) stay at 6-bit; rest at 4-bit. Better quality than uniform 4-bit at similar size.  
-**Block float (MX)**: Uses floating-point number representation per block instead of integer. Different quality/speed profile vs affine at the same bit-width.
-
----
-
-## Benchmarks
-
-Each model is evaluated on **performance** and **quality** in a single pass — no duplicate model loads.
-
-### Quality benchmarks
+### Quality (uses public benchmark datasets)
 
 | Benchmark | Task | Metric | Samples |
 |---|---|---|---|
@@ -42,135 +22,116 @@ Each model is evaluated on **performance** and **quality** in a single pass — 
 | MMLU | Multiple choice world knowledge | Accuracy | 50 |
 | Long-context | Long-form generation | Length requirement met | 10 |
 
-### Performance metrics (from mlx-lm's `GenerationResponse`)
+### Performance (from mlx-lm's `GenerationResponse`)
 
 - **Prefill tok/s** — prompt processing speed
 - **Decode tok/s** — generation speed
 - **Peak memory (GB)** — Metal/unified memory peak
 - **Context scaling** — decode speed at 128 / 256 / 512 / 1024 token contexts
 
+> Sample sizes are intentionally small (~100 total) for fast iteration. Treat absolute accuracy numbers as **indicative**, not definitive. Cross-variant deltas are reliable.
+
 ---
 
-## Project Structure
+## Quantization variants
 
-```
-MLX-Quantisation/
-├── models/                        # Downloaded and quantized models
-│   ├── granite-4.1-8b-fp16/       # FP16 baseline (17.6 GB)
-│   ├── granite-4.1-8b-4bit/       # Affine 4-bit
-│   ├── granite-4.1-8b-5bit/
-│   ├── granite-4.1-8b-6bit/
-│   ├── granite-4.1-8b-8bit/
-│   ├── granite-4.1-8b-mixed4_6/   # Mixed 4+6 bit
-│   ├── granite-4.1-8b-mxfp4/      # Block float FP4
-│   └── granite-4.1-8b-mxfp8/      # Block float FP8
-│
-├── datasets/                      # Benchmark datasets (JSONL)
-│   ├── gsm8k.jsonl                 # 25 math problems
-│   ├── humaneval.jsonl             # 20 code problems
-│   ├── mmlu.jsonl                  # 50 multiple choice
-│   └── long_context_prompts.jsonl  # 10 long-form prompts
-│
-├── outputs/                       # Results per model
-│   └── granite-4.1-8b-<variant>/
-│       ├── gsm8k.jsonl             # Per-sample results
-│       ├── humaneval.jsonl
-│       ├── mmlu.jsonl
-│       ├── long_context.jsonl
-│       ├── context_scaling.json    # Scaling curve
-│       └── summary.json           # Accuracy + perf summary
-│
-├── reports/
-│   └── final_benchmark.md         # Generated comparison report
-│
-└── scripts/
-    ├── setup_datasets.py           # Download benchmark datasets
-    ├── quantize.py                 # Quantize models
-    ├── benchmark.py                # Run benchmarks (perf + quality)
-    └── generate_report.py          # Compile results into report
-```
+| Variant | Method | Notes |
+|---|---|---|
+| `4bit` / `5bit` / `6bit` / `8bit` | Affine integer | Standard integer quantization. Group size 64 by default. |
+| `mixed4_6` (and other mixed recipes) | Mixed-bit | Sensitive layers (embeddings, first/last layers) at higher precision, rest at lower. Better quality than uniform 4-bit at similar size. |
+| `mxfp4` / `mxfp8` | Block float (Microscaling) | Floating-point representation per block instead of integer. Different quality/speed profile vs affine at same bit-width. |
+| Custom group sizes | Affine | `--group-sizes 32 128` etc. — affects quality vs compression tradeoff. |
+
+All variants are produced by `mlx_lm convert` under the hood — no custom quantization code.
 
 ---
 
 ## Setup
 
 ```bash
-# Create and activate virtual environment
-uv venv /Users/sahil/venv/mlx
-source /Users/sahil/venv/mlx/bin/activate
+# Create and activate a virtual environment
+uv venv .venv
+source .venv/bin/activate
 
 # Install dependencies
-uv pip install mlx-lm datasets tqdm psutil
+uv pip install mlx-lm datasets huggingface_hub tqdm
 ```
-
-> **Note**: mlx-lm main branch has a bug fix for Granite tied embeddings (`lm_head.weight`). If you hit a `ValueError: Received 1 parameters not in model: lm_head.weight` error, ensure you're on a version that includes the `sanitize()` fix in `mlx_lm/models/granite.py`.
 
 ---
 
-## Commands
+## Usage
 
-### 1. Download datasets
+### 1. Download benchmark datasets (one-time)
 
 ```bash
 python scripts/setup_datasets.py
 ```
 
-### 2. Download base model
+### 2. Download a base model (FP16 / BF16)
 
 ```python
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="ibm-granite/granite-4.1-8b",
-    local_dir="./models/granite-4.1-8b-fp16",
-    max_workers=8
+    repo_id="<HF_REPO_ID>",                       # e.g. ibm-granite/granite-4.1-8b
+    local_dir="./models/<MODEL_NAME>-fp16",       # e.g. ./models/granite-4.1-8b-fp16
+    max_workers=8,
 )
 ```
 
 ### 3. Quantize
 
+Pointing `--bits / --mixed / --q-mode` at `scripts/quantize.py` runs `mlx_lm convert` and writes variants into `./models/`.
+
 ```bash
-# All uniform variants
+# All uniform variants (4/5/6/8 bit affine)
 python scripts/quantize.py --all --verify
 
-# Mixed-bit
+# Mixed-bit (e.g. 4-bit body, 6-bit sensitive layers)
 python scripts/quantize.py --mixed 4_6 --verify
 
-# Block float
+# Block-float (microscaling)
 python scripts/quantize.py --q-mode mxfp4 mxfp8 --verify
 
-# Group size variants (e.g. 4-bit at group 32 and 128)
+# Custom group sizes (e.g. 4-bit at group 32 and 128)
 python scripts/quantize.py --bits 4 --group-sizes 32 128 --verify
 ```
 
-### 4. Benchmark a single model
+> Update `BASE_MODEL` in `scripts/quantize.py` to point at your FP16 model folder, and adjust the output naming if you want something other than the default `<model>-<variant>` convention.
+
+### 4. Benchmark a model
 
 ```bash
-python scripts/benchmark.py --model ./models/granite-4.1-8b-fp16 --label fp16
-python scripts/benchmark.py --model ./models/granite-4.1-8b-4bit --label 4bit
-python scripts/benchmark.py --model ./models/granite-4.1-8b-mixed4_6 --label mixed4_6
-python scripts/benchmark.py --model ./models/granite-4.1-8b-mxfp4 --label mxfp4
+python scripts/benchmark.py --model ./models/<MODEL_NAME>-<VARIANT> --label <VARIANT>
 ```
 
-### 5. Benchmark all models at once
+Or benchmark every quantized variant in `./models/` sequentially with a 2-minute cooldown between runs:
 
 ```bash
 python scripts/benchmark.py --all
 ```
 
-### 6. Generate comparison report
+### 5. Generate the comparison report
 
 ```bash
-python scripts/generate_report.py
-# → reports/final_benchmark.md
+python scripts/generate_report.py        # → reports/final_benchmark.md
 ```
+
+### 6. (Optional) Generate HuggingFace model cards
+
+For publishing quantized variants to HuggingFace, generate per-model README cards from the benchmark results:
+
+```bash
+python scripts/generate_model_cards.py    # writes models/<variant>/README.md
+```
+
+> Update the model-name / author constants at the top of `generate_model_cards.py` to match your setup.
 
 ---
 
-## Full Pipeline (end to end)
+## End-to-end pipeline
 
 ```bash
-source /Users/sahil/venv/mlx/bin/activate
-cd /Users/sahil/MLX_Tests/MLX-Quantisation
+source .venv/bin/activate
 
 python scripts/setup_datasets.py
 python scripts/quantize.py --all --mixed 4_6 --q-mode mxfp4 mxfp8 --verify
@@ -180,17 +141,52 @@ python scripts/generate_report.py
 
 ---
 
-## Current Status
+## Project structure
 
-| Step | Status |
-|---|---|
-| Datasets downloaded | ✅ |
-| FP16 model downloaded | ✅ |
-| Uniform quantization (4/5/6/8 bit) | ✅ |
-| Mixed-bit (mixed4_6) | ✅ |
-| Block float (mxfp4, mxfp8) | 🔄 in progress |
-| FP16 benchmark | ✅ |
-| 4/5/6/8 bit benchmark | 🔄 in progress |
-| mixed4_6 benchmark | 🔄 in progress |
-| mxfp4 / mxfp8 benchmark | ⏳ pending |
-| Final report | ⏳ pending |
+```
+.
+├── models/                          # Downloaded + quantized models (git-ignored)
+│   ├── <model-name>-fp16/
+│   ├── <model-name>-4bit/
+│   ├── <model-name>-mxfp4/
+│   └── ...
+│
+├── datasets/                        # Benchmark prompts (JSONL)
+│   ├── gsm8k.jsonl
+│   ├── humaneval.jsonl
+│   ├── mmlu.jsonl
+│   └── long_context_prompts.jsonl
+│
+├── outputs/                         # Per-model results (git-ignored)
+│   └── <model-name>-<variant>/
+│       ├── gsm8k.jsonl              # Per-sample results
+│       ├── humaneval.jsonl
+│       ├── mmlu.jsonl
+│       ├── long_context.jsonl
+│       ├── context_scaling.json
+│       └── summary.json
+│
+├── reports/                         # Generated reports (git-ignored)
+│   └── final_benchmark.md
+│
+└── scripts/
+    ├── setup_datasets.py            # Download benchmark datasets
+    ├── quantize.py                  # Quantize via mlx_lm convert
+    ├── benchmark.py                 # Run benchmarks (perf + quality)
+    ├── generate_report.py           # Compile comparison report
+    └── generate_model_cards.py      # Generate HF README cards
+```
+
+---
+
+## Notes
+
+- All inference uses mlx-lm's `stream_generate`. No custom inference code.
+- All quantization uses `mlx_lm convert` under the hood. No custom quant code.
+- Benchmarks measure both per-sample performance (prefill/decode tok/s, peak memory) **and** quality (accuracy / pass@1) in a single pass — the model is loaded once per variant.
+
+---
+
+## License
+
+Apache 2.0
