@@ -1,0 +1,20 @@
+{"id": "m_01", "category": "reasoning", "prompt": "If a train travels 120km in 1.5 hours, then stops for 20 minutes, then travels another 80km at the same speed, what is the total journey time?"}
+{"id": "m_02", "category": "reasoning", "prompt": "A bat and ball cost $1.10 together. The bat costs $1 more than the ball. How much does the ball cost? Show your reasoning step by step."}
+{"id": "m_03", "category": "reasoning", "prompt": "There are 3 boxes: one with apples, one with oranges, one with both. All labels are wrong. You can pick one fruit from one box. How do you label all boxes correctly?"}
+{"id": "m_04", "category": "coding", "prompt": "Write a Python function that finds the two numbers in a list that sum to a target value. Return their indices. Handle edge cases."}
+{"id": "m_05", "category": "coding", "prompt": "Write a SQL query to find the top 5 customers by total purchase value in the last 30 days, from tables: orders(id, customer_id, created_at) and order_items(order_id, price, quantity)."}
+{"id": "m_06", "category": "coding", "prompt": "Explain what this code does and identify any bugs: `def fib(n): return n if n <= 1 else fib(n-1) + fib(n-2)`. How would you optimize it?"}
+{"id": "m_07", "category": "knowledge", "prompt": "What is the difference between L1 and L2 regularization? When would you use each?"}
+{"id": "m_08", "category": "knowledge", "prompt": "Explain the CAP theorem and give a real-world example of a system that prioritizes each combination."}
+{"id": "m_09", "category": "knowledge", "prompt": "What is the difference between process and thread? Explain with an example where you'd choose one over the other."}
+{"id": "m_10", "category": "instruction", "prompt": "List exactly 5 advantages of microservices over monolithic architecture. Use bullet points. Keep each point under 20 words."}
+{"id": "m_11", "category": "instruction", "prompt": "Translate the following to French, then back to English, then note any meaning that was lost: 'The early bird catches the worm but the second mouse gets the cheese.'"}
+{"id": "m_12", "category": "instruction", "prompt": "Respond only in JSON. Keys: 'capital', 'population_millions', 'continent' for the country Germany."}
+{"id": "m_13", "category": "math", "prompt": "Solve: 2x\u00b2 + 5x - 3 = 0. Show all steps."}
+{"id": "m_14", "category": "math", "prompt": "A company grows at 12% per year. How many years to double in size? Use the rule of 72 and verify with exact calculation."}
+{"id": "m_15", "category": "math", "prompt": "What is the probability of rolling at least one 6 in four rolls of a fair die?"}
+{"id": "m_16", "category": "edge", "prompt": "What is 0 divided by 0? Explain why mathematicians say this is indeterminate, not undefined."}
+{"id": "m_17", "category": "edge", "prompt": "Write a haiku about quantization in neural networks."}
+{"id": "m_18", "category": "edge", "prompt": "If you had to explain gradient descent to a 10-year-old, what analogy would you use?"}
+{"id": "m_19", "category": "edge", "prompt": "What comes next in this sequence: 1, 1, 2, 3, 5, 8, 13, ___? Now give a different sequence that also starts with 1, 1, 2, 3."}
+{"id": "m_20", "category": "edge", "prompt": "Is this statement true or false, and why: 'All models are wrong but some are useful.'"}
