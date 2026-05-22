@@ -21,7 +21,7 @@ MODELS_DIR = Path(__file__).parent.parent / "models"
 REPORTS_DIR = Path(__file__).parent.parent / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
-AUTHOR     = "SahilChachra"
+AUTHOR     = "sahilchachra"
 BASE_NAME  = "granite-4.1-8b"
 VARIANTS   = ["4bit", "5bit", "6bit", "8bit", "mixed4_6", "mxfp4", "mxfp8"]
 

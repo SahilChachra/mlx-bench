@@ -13,7 +13,7 @@ from pathlib import Path
 OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 MODELS_DIR  = Path(__file__).parent.parent / "models"
 
-AUTHOR      = "SahilChachra"
+AUTHOR      = "sahilchachra"
 BASE_MODEL  = "ibm-granite/granite-4.1-8b"
 BASE_LABEL  = "granite-4.1-8b-fp16"
 
