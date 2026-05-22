@@ -26,7 +26,10 @@ source "$VENV/bin/activate"
 cd "$PROJECT_DIR"
 
 # ── discover models ───────────────────────────────────────────────────────────
-mapfile -t MODELS < <(ls -d "$MODELS_DIR"/*/ 2>/dev/null | sed 's:/*$::')
+MODELS=()
+for d in "$MODELS_DIR"/*/; do
+    [[ -d "$d" ]] && MODELS+=("${d%/}")
+done
 
 if [[ ${#MODELS[@]} -eq 0 ]]; then
     echo "No models found in $MODELS_DIR/"
