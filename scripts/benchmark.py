@@ -336,6 +336,10 @@ def run_benchmark(model_path, label=None):
     print("\nLoading model...")
     model, tokenizer = load(model_path)
     mx.eval(model.parameters())
+    # Force MLX to drop any cached memory from previous models, then reset
+    # the peak counter so it tracks only this model's footprint.
+    mx.clear_cache()
+    mx.reset_peak_memory()
     print(f"Model loaded. Active Metal memory: {mx.get_active_memory() / 1024**3:.2f} GB\n")
 
     summary = {"label": label, "model_path": str(model_path), "benchmarks": {}}

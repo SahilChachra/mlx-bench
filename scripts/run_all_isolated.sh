@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#
+# Run benchmark.py once per model in a fresh Python process.
+# Each model gets a clean process → peak memory is measured accurately.
+# 2-minute cooldown between runs to let the GPU settle.
+#
+# Usage:
+#   bash scripts/run_all_isolated.sh
+#
+set -euo pipefail
+
+# ── config ────────────────────────────────────────────────────────────────────
+VENV="/Users/sahil/venv/mlx"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MODELS_DIR="$PROJECT_DIR/models"
+COOLDOWN_SECONDS=120
+
+# ── activate venv ─────────────────────────────────────────────────────────────
+if [[ ! -d "$VENV" ]]; then
+    echo "ERROR: venv not found at $VENV" >&2
+    exit 1
+fi
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+cd "$PROJECT_DIR"
+
+# ── discover models ───────────────────────────────────────────────────────────
+mapfile -t MODELS < <(ls -d "$MODELS_DIR"/*/ 2>/dev/null | sed 's:/*$::')
+
+if [[ ${#MODELS[@]} -eq 0 ]]; then
+    echo "No models found in $MODELS_DIR/"
+    exit 1
+fi
+
+echo "================================================================"
+echo "Isolated benchmark run — ${#MODELS[@]} models, ${COOLDOWN_SECONDS}s cooldown between each"
+echo "================================================================"
+for m in "${MODELS[@]}"; do
+    echo "  - $(basename "$m")"
+done
+echo
+
+START_TIME=$(date +%s)
+
+# ── run each model in its own process ─────────────────────────────────────────
+for i in "${!MODELS[@]}"; do
+    model_path="${MODELS[$i]}"
+    model_name="$(basename "$model_path")"
+    # Strip the "granite-4.1-8b-" prefix (if present) for a clean --label
+    label="${model_name#granite-4.1-8b-}"
+
+    echo
+    echo "================================================================"
+    echo "[$((i+1))/${#MODELS[@]}] $model_name  (label: $label)"
+    echo "================================================================"
+
+    python scripts/benchmark.py --model "$model_path" --label "$label"
+
+    # Cooldown (skip after last model)
+    if [[ $i -lt $((${#MODELS[@]} - 1)) ]]; then
+        echo
+        echo "Cooling down for ${COOLDOWN_SECONDS}s..."
+        for remaining in $(seq "$COOLDOWN_SECONDS" -10 10); do
+            printf "  %ds remaining...\r" "$remaining"
+            sleep 10
+        done
+        echo "  Done. Starting next model.    "
+    fi
+done
+
+# ── done ──────────────────────────────────────────────────────────────────────
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+HOURS=$((ELAPSED / 3600))
+MINUTES=$(( (ELAPSED % 3600) / 60 ))
+
+echo
+echo "================================================================"
+echo "All ${#MODELS[@]} models benchmarked in ${HOURS}h ${MINUTES}m"
+echo "================================================================"
+echo "Results in: $PROJECT_DIR/outputs/"
+echo "Next steps:"
+echo "  python scripts/generate_model_cards.py"
+echo "  python scripts/generate_report.py"

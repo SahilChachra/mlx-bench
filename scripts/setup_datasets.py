@@ -18,14 +18,14 @@ def save_jsonl(data, path):
     print(f"  Saved {len(data)} samples → {path}")
 
 
-def setup_gsm8k(n=25):
+def setup_gsm8k(n=30):
     print("Downloading GSM8K...")
     ds = load_dataset("openai/gsm8k", "main", split=f"test[:{n}]")
     samples = [{"question": r["question"], "answer": r["answer"]} for r in ds]
     save_jsonl(samples, DATASETS_DIR / "gsm8k.jsonl")
 
 
-def setup_humaneval(n=20):
+def setup_humaneval(n=30):
     print("Downloading HumanEval...")
     ds = load_dataset("openai/openai_humaneval", split=f"test[:{n}]")
     samples = [
