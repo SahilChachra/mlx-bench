@@ -24,9 +24,11 @@ import sys
 import time
 from pathlib import Path
 
-BASE_MODEL = str(Path(__file__).parent.parent / "models" / "granite-4.1-8b-fp16")
+from config import BASE_NAME
+
 MODELS_DIR = Path(__file__).parent.parent / "models"
 MODELS_DIR.mkdir(exist_ok=True)
+BASE_MODEL = str(MODELS_DIR / f"{BASE_NAME}-fp16")
 
 ALL_BITS        = [4, 5, 6, 8]
 DEFAULT_GROUP   = 64
@@ -57,7 +59,7 @@ def _skip_or_run(output_path, cmd):
 
 def quantize_uniform(bits, group=DEFAULT_GROUP, upload_prefix=None):
     g_suffix = f"-g{group}" if group != DEFAULT_GROUP else ""
-    name = f"granite-4.1-8b-{bits}bit{g_suffix}"
+    name = f"{BASE_NAME}-{bits}bit{g_suffix}"
     output_path = MODELS_DIR / name
 
     print(f"\n{'='*60}")
@@ -80,7 +82,7 @@ def quantize_uniform(bits, group=DEFAULT_GROUP, upload_prefix=None):
 
 
 def quantize_mixed(recipe, upload_prefix=None):
-    name = f"granite-4.1-8b-mixed{recipe}"
+    name = f"{BASE_NAME}-mixed{recipe}"
     output_path = MODELS_DIR / name
 
     print(f"\n{'='*60}")
@@ -103,7 +105,7 @@ def quantize_mixed(recipe, upload_prefix=None):
 
 def quantize_mode(mode, upload_prefix=None):
     """Block float modes: mxfp4, mxfp8, nvfp4."""
-    name = f"granite-4.1-8b-{mode}"
+    name = f"{BASE_NAME}-{mode}"
     output_path = MODELS_DIR / name
 
     print(f"\n{'='*60}")
@@ -179,18 +181,18 @@ if __name__ == "__main__":
             results[key] = quantize_uniform(bits, group, args.upload_prefix)
             if results[key] and args.verify:
                 g_sfx = f"-g{group}" if group != DEFAULT_GROUP else ""
-                results[f"{key}_verify"] = verify(MODELS_DIR / f"granite-4.1-8b-{bits}bit{g_sfx}")
+                results[f"{key}_verify"] = verify(MODELS_DIR / f"{BASE_NAME}-{bits}bit{g_sfx}")
 
     for recipe in mixed_targets:
         key = f"mixed{recipe}"
         results[key] = quantize_mixed(recipe, args.upload_prefix)
         if results[key] and args.verify:
-            results[f"{key}_verify"] = verify(MODELS_DIR / f"granite-4.1-8b-mixed{recipe}")
+            results[f"{key}_verify"] = verify(MODELS_DIR / f"{BASE_NAME}-mixed{recipe}")
 
     for mode in mode_targets:
         results[mode] = quantize_mode(mode, args.upload_prefix)
         if results[mode] and args.verify:
-            results[f"{mode}_verify"] = verify(MODELS_DIR / f"granite-4.1-8b-{mode}")
+            results[f"{mode}_verify"] = verify(MODELS_DIR / f"{BASE_NAME}-{mode}")
 
     print(f"\n{'='*60}")
     print("QUANTIZATION SUMMARY")

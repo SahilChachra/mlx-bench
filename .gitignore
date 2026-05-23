@@ -19,3 +19,8 @@ venv/
 # Uncomment to commit results to the repo
 outputs/
 reports/
+
+# Downloaded eval datasets — fetched on demand
+datasets/flores200_dataset/
+datasets/flores200_dataset.tar.gz
+datasets/flores_*.jsonl

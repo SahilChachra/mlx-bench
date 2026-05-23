@@ -4,8 +4,41 @@ A reproducible benchmarking pipeline for **MLX-quantized LLMs** on Apple Silicon
 
 Quantize any HuggingFace LLM that [mlx-lm](https://github.com/ml-explore/mlx-lm) supports into every available variant (4/5/6/8-bit affine, mixed-bit, block-float MX FP4/FP8), then measure performance **and** quality side-by-side in a single pass — so you can pick the right variant for your use case.
 
-**Runtime**: MLX + mlx-lm  
+**Runtime**: MLX + mlx-lm
 **Hardware**: Any Apple Silicon Mac (M1 or later)
+
+---
+
+## Design
+
+The pipeline is **model-agnostic**. The model under test is selected via environment variables read by `scripts/config.py`. You should not need to edit the core scripts when adding a new model — just export the right env vars and run.
+
+```bash
+export MLX_BENCH_BASE_NAME="granite-4.1-8b"           # local folder prefix
+export MLX_BENCH_HF_REPO="ibm-granite/granite-4.1-8b" # source HF repo
+export MLX_BENCH_DISPLAY_NAME="Granite 4.1 8B"        # human label (optional)
+```
+
+That base name flows through everything: model folders (`models/${BASE_NAME}-{4bit,8bit,...}`), result folders (`outputs/${BASE_NAME}-...`), HF repo names (`<author>/${BASE_NAME}-<variant>-mlx`), and report titles.
+
+### Convention: special-case scripts for non-standard models
+
+The generic scripts handle anything that fits the default "load → prompt → score" flow. For models that need a different evaluation (e.g. a translation model needs FLORES, not GSM8K), add a sibling script:
+
+| Generic script | Special-case example |
+|---|---|
+| `scripts/benchmark.py` (GSM8K/HumanEval/MMLU)       | `scripts/flores_benchmark.py` (FLORES-200 chrF/BLEU) |
+| `scripts/generate_model_cards.py` (auto-discovers benchmarks) | `scripts/generate_model_cards_hymt2.py` (curated copy for Hy-MT2) |
+| `scripts/run_pipeline.sh` (full default flow)       | `scripts/run_hymt2_overnight.sh` (overnight one-shot) |
+
+Choose which benchmark script the runner uses via `MLX_BENCH_SCRIPT`:
+
+```bash
+export MLX_BENCH_SCRIPT="scripts/flores_benchmark.py"
+bash scripts/run_all_isolated.sh
+```
+
+The generic `generate_model_cards.py` and `generate_report.py` auto-detect which benchmarks each `summary.json` contains and only render the columns that have data — so a model evaluated only on FLORES won't show empty GSM8K columns, and vice versa.
 
 ---
 
@@ -13,14 +46,15 @@ Quantize any HuggingFace LLM that [mlx-lm](https://github.com/ml-explore/mlx-lm)
 
 For each model variant, in a single load:
 
-### Quality (uses public benchmark datasets)
+### Quality (defaults; swap by changing the benchmark script)
 
-| Benchmark | Task | Metric | Samples |
+| Benchmark | Task | Metric | Provided by |
 |---|---|---|---|
-| GSM8K | Math word problems | Accuracy (exact answer match) | 25 |
-| HumanEval | Python code generation | pass@1 (tests pass) | 20 |
-| MMLU | Multiple choice world knowledge | Accuracy | 50 |
-| Long-context | Long-form generation | Length requirement met | 10 |
+| GSM8K     | Math word problems            | Accuracy (exact answer match) | `benchmark.py` |
+| HumanEval | Python code generation        | pass@1 (tests pass) | `benchmark.py` |
+| MMLU      | Multiple-choice world knowledge | Accuracy | `benchmark.py` |
+| Long-context | Long-form generation       | Length requirement met | `benchmark.py` |
+| FLORES-200 | Multilingual translation     | chrF++ / BLEU (sacrebleu) | `flores_benchmark.py` |
 
 ### Performance (from mlx-lm's `GenerationResponse`)
 
@@ -29,7 +63,7 @@ For each model variant, in a single load:
 - **Peak memory (GB)** — Metal/unified memory peak
 - **Context scaling** — decode speed at 128 / 256 / 512 / 1024 token contexts
 
-> Sample sizes are intentionally small (~100 total) for fast iteration. Treat absolute accuracy numbers as **indicative**, not definitive. Cross-variant deltas are reliable.
+> Sample sizes are intentionally small for fast iteration. Treat absolute accuracy numbers as **indicative**, not definitive. Cross-variant deltas are reliable.
 
 ---
 
@@ -38,9 +72,9 @@ For each model variant, in a single load:
 | Variant | Method | Notes |
 |---|---|---|
 | `4bit` / `5bit` / `6bit` / `8bit` | Affine integer | Standard integer quantization. Group size 64 by default. |
-| `mixed4_6` (and other mixed recipes) | Mixed-bit | Sensitive layers (embeddings, first/last layers) at higher precision, rest at lower. Better quality than uniform 4-bit at similar size. |
-| `mxfp4` / `mxfp8` | Block float (Microscaling) | Floating-point representation per block instead of integer. Different quality/speed profile vs affine at same bit-width. |
-| Custom group sizes | Affine | `--group-sizes 32 128` etc. — affects quality vs compression tradeoff. |
+| `mixed4_6` (and other mixed recipes) | Mixed-bit | Sensitive layers (embeddings, first/last layers) at higher precision, rest at lower. |
+| `mxfp4` / `mxfp8` | Block float (Microscaling) | Floating-point representation per block instead of integer. |
+| Custom group sizes | Affine | `--group-sizes 32 128` etc. |
 
 All variants are produced by `mlx_lm convert` under the hood — no custom quantization code.
 
@@ -49,82 +83,86 @@ All variants are produced by `mlx_lm convert` under the hood — no custom quant
 ## Setup
 
 ```bash
-# Create and activate a virtual environment
 uv venv .venv
 source .venv/bin/activate
 
-# Install dependencies
-uv pip install mlx-lm datasets huggingface_hub tqdm
+uv pip install mlx-lm datasets huggingface_hub tqdm sacrebleu
 ```
 
 ---
 
 ## Usage
 
-### 1. Download benchmark datasets (one-time)
+### 1. Pick the model
+
+```bash
+export MLX_BENCH_BASE_NAME="granite-4.1-8b"
+export MLX_BENCH_HF_REPO="ibm-granite/granite-4.1-8b"
+```
+
+### 2. Download the FP16 weights
+
+```bash
+hf download "$MLX_BENCH_HF_REPO" --local-dir "models/${MLX_BENCH_BASE_NAME}-fp16"
+```
+
+### 3. Datasets (one-time, only for text-gen evals)
 
 ```bash
 python scripts/setup_datasets.py
 ```
 
-### 2. Download a base model (FP16 / BF16)
-
-```python
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id="<HF_REPO_ID>",                       # e.g. ibm-granite/granite-4.1-8b
-    local_dir="./models/<MODEL_NAME>-fp16",       # e.g. ./models/granite-4.1-8b-fp16
-    max_workers=8,
-)
-```
-
-### 3. Quantize
-
-Pointing `--bits / --mixed / --q-mode` at `scripts/quantize.py` runs `mlx_lm convert` and writes variants into `./models/`.
+For FLORES-based translation eval, fetch the dataset:
 
 ```bash
-# All uniform variants (4/5/6/8 bit affine)
-python scripts/quantize.py --all --verify
+cd datasets && curl -sLO https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz && tar -xzf flores200_dataset.tar.gz && cd ..
+```
 
-# Mixed-bit (e.g. 4-bit body, 6-bit sensitive layers)
+### 4. Quantize
+
+```bash
+python scripts/quantize.py --bits 4 8                # 4-bit and 8-bit affine
+python scripts/quantize.py --all --verify            # 4/5/6/8 + smoke test
 python scripts/quantize.py --mixed 4_6 --verify
-
-# Block-float (microscaling)
 python scripts/quantize.py --q-mode mxfp4 mxfp8 --verify
-
-# Custom group sizes (e.g. 4-bit at group 32 and 128)
-python scripts/quantize.py --bits 4 --group-sizes 32 128 --verify
 ```
 
-> Update `BASE_MODEL` in `scripts/quantize.py` to point at your FP16 model folder, and adjust the output naming if you want something other than the default `<model>-<variant>` convention.
+Folders land in `models/${MLX_BENCH_BASE_NAME}-<variant>/`.
 
-### 4. Benchmark a model
+### 5. Benchmark
+
+Single model:
 
 ```bash
-python scripts/benchmark.py --model ./models/<MODEL_NAME>-<VARIANT> --label <VARIANT>
+python scripts/benchmark.py --model "models/${MLX_BENCH_BASE_NAME}-4bit" --label 4bit
 ```
 
-Or benchmark every quantized variant in `./models/` sequentially with a 2-minute cooldown between runs:
+All variants in isolated processes (clean peak memory per run):
 
 ```bash
-python scripts/benchmark.py --all
+bash scripts/run_all_isolated.sh
 ```
 
-### 5. Generate the comparison report
+To run a non-default benchmark (e.g. translation):
 
 ```bash
-python scripts/generate_report.py        # → reports/final_benchmark.md
+MLX_BENCH_SCRIPT=scripts/flores_benchmark.py bash scripts/run_all_isolated.sh
 ```
 
-### 6. (Optional) Generate HuggingFace model cards
-
-For publishing quantized variants to HuggingFace, generate per-model README cards from the benchmark results:
+### 6. Report
 
 ```bash
-python scripts/generate_model_cards.py    # writes models/<variant>/README.md
+python scripts/generate_report.py   # → reports/${MLX_BENCH_BASE_NAME}_benchmark.md
 ```
 
-> Update the model-name / author constants at the top of `generate_model_cards.py` to match your setup.
+### 7. (Optional) Generate HuggingFace model cards + push
+
+```bash
+python scripts/generate_model_cards.py        # writes models/<variant>/README.md
+HF_TOKEN=... python scripts/push_to_hf.py     # publishes to <author>/<base>-<variant>-mlx
+```
+
+Override the HF author via `MLX_BENCH_HF_AUTHOR` (default: `sahilchachra`).
 
 ---
 
@@ -133,10 +171,20 @@ python scripts/generate_model_cards.py    # writes models/<variant>/README.md
 ```bash
 source .venv/bin/activate
 
-python scripts/setup_datasets.py
-python scripts/quantize.py --all --mixed 4_6 --q-mode mxfp4 mxfp8 --verify
-python scripts/benchmark.py --all
-python scripts/generate_report.py
+export MLX_BENCH_BASE_NAME="granite-4.1-8b"
+export MLX_BENCH_HF_REPO="ibm-granite/granite-4.1-8b"
+
+bash scripts/run_pipeline.sh
+```
+
+For a translation model:
+
+```bash
+export MLX_BENCH_BASE_NAME="hy-mt2-7b"
+export MLX_BENCH_HF_REPO="tencent/Hy-MT2-7B"
+export MLX_BENCH_SCRIPT="scripts/flores_benchmark.py"
+
+bash scripts/run_pipeline.sh --bits "4 8" --skip-fp16
 ```
 
 ---
@@ -146,36 +194,53 @@ python scripts/generate_report.py
 ```
 .
 ├── models/                          # Downloaded + quantized models (git-ignored)
-│   ├── <model-name>-fp16/
-│   ├── <model-name>-4bit/
-│   ├── <model-name>-mxfp4/
+│   ├── <base-name>-fp16/
+│   ├── <base-name>-4bit/
 │   └── ...
 │
-├── datasets/                        # Benchmark prompts (JSONL)
+├── datasets/                        # Benchmark prompts (most git-ignored)
 │   ├── gsm8k.jsonl
 │   ├── humaneval.jsonl
 │   ├── mmlu.jsonl
-│   └── long_context_prompts.jsonl
+│   ├── long_context_prompts.jsonl
+│   └── flores200_dataset/           # downloaded on demand
 │
 ├── outputs/                         # Per-model results (git-ignored)
-│   └── <model-name>-<variant>/
-│       ├── gsm8k.jsonl              # Per-sample results
-│       ├── humaneval.jsonl
-│       ├── mmlu.jsonl
-│       ├── long_context.jsonl
+│   └── <base-name>-<variant>/
+│       ├── *.jsonl                  # per-sample records
 │       ├── context_scaling.json
 │       └── summary.json
 │
 ├── reports/                         # Generated reports (git-ignored)
-│   └── final_benchmark.md
 │
 └── scripts/
-    ├── setup_datasets.py            # Download benchmark datasets
+    ├── config.py                    # Reads MLX_BENCH_* env vars
+    ├── setup_datasets.py            # Download text-gen eval datasets
     ├── quantize.py                  # Quantize via mlx_lm convert
-    ├── benchmark.py                 # Run benchmarks (perf + quality)
-    ├── generate_report.py           # Compile comparison report
-    └── generate_model_cards.py      # Generate HF README cards
+    ├── benchmark.py                 # Generic benchmark (GSM8K/HumanEval/MMLU/long-ctx)
+    ├── flores_benchmark.py          # Translation benchmark (FLORES-200)
+    ├── generate_report.py           # Auto-discovering comparison report
+    ├── generate_model_cards.py      # Auto-discovering generic HF cards
+    ├── generate_model_cards_<X>.py  # Optional: curated cards per model
+    ├── push_to_hf.py                # Publish quantized models to HF
+    ├── run_pipeline.sh              # Full default pipeline
+    ├── run_all_isolated.sh          # One isolated process per model
+    └── run_<X>_overnight.sh         # Optional: full overnight one-shot per model
 ```
+
+---
+
+## Environment variables
+
+| Variable | Default | Used by |
+|---|---|---|
+| `MLX_BENCH_BASE_NAME`    | `granite-4.1-8b` | All scripts (folder + repo naming) |
+| `MLX_BENCH_HF_REPO`      | `ibm-granite/granite-4.1-8b` | quantize, report, cards |
+| `MLX_BENCH_DISPLAY_NAME` | `$BASE_NAME` | report title |
+| `MLX_BENCH_SCRIPT`       | `scripts/benchmark.py` | `run_all_isolated.sh`, `run_pipeline.sh` |
+| `MLX_BENCH_HF_AUTHOR`    | `sahilchachra` | `generate_model_cards.py`, `push_to_hf.py` |
+| `MLX_BENCH_LICENSE`      | `apache-2.0` | `generate_model_cards.py` (frontmatter) |
+| `HF_TOKEN`               | — | `push_to_hf.py` |
 
 ---
 
@@ -183,7 +248,8 @@ python scripts/generate_report.py
 
 - All inference uses mlx-lm's `stream_generate`. No custom inference code.
 - All quantization uses `mlx_lm convert` under the hood. No custom quant code.
-- Benchmarks measure both per-sample performance (prefill/decode tok/s, peak memory) **and** quality (accuracy / pass@1) in a single pass — the model is loaded once per variant.
+- Benchmarks measure both per-sample performance (prefill/decode tok/s, peak memory) **and** quality in a single pass — the model is loaded once per variant.
+- Peak memory is measured via `mx.get_peak_memory()`, which is process-wide. The runner spawns one process per variant so peaks don't carry over between models.
 
 ---
 

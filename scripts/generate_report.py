@@ -1,5 +1,8 @@
 """
-Compile all benchmark results into a final comparison report.
+Compile all benchmark results into a comparison report.
+
+Generic: auto-discovers which benchmarks each summary contains and only renders
+the columns that have data. Works for any model that the pipeline has run on.
 
 Usage:
   python scripts/generate_report.py
@@ -11,12 +14,14 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from config import BASE_NAME, BASE_HF_REPO, DISPLAY_NAME
+
 OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 REPORTS_DIR = Path(__file__).parent.parent / "reports"
 MODELS_DIR  = Path(__file__).parent.parent / "models"
 REPORTS_DIR.mkdir(exist_ok=True)
 
-SORT_ORDER = ["fp16", "8bit", "6bit", "5bit", "mixed4_6", "4bit"]
+SORT_ORDER = ["fp16", "8bit", "mxfp8", "6bit", "5bit", "mixed4_6", "4bit", "mxfp4"]
 
 
 def load_summary(model_dir):
@@ -42,7 +47,10 @@ def disk_size_mb(model_name):
 
 
 def discover():
-    dirs = [d for d in OUTPUTS_DIR.iterdir() if d.is_dir() and (d / "summary.json").exists()]
+    if not OUTPUTS_DIR.exists():
+        return []
+    dirs = [d for d in OUTPUTS_DIR.iterdir()
+            if d.is_dir() and d.name.startswith(f"{BASE_NAME}-") and (d / "summary.json").exists()]
 
     def sort_key(d):
         for i, k in enumerate(SORT_ORDER):
@@ -57,10 +65,29 @@ def fmt(v, suffix="", missing="—"):
     return f"{v}{suffix}" if v is not None else missing
 
 
+def collect_quality_columns(summaries):
+    """Return list of (column_label, benchmark_key, field, suffix) found in any summary."""
+    seen = []
+    candidates = [
+        ("GSM8K",         "gsm8k",     "accuracy", "%"),
+        ("MMLU",          "mmlu",      "accuracy", "%"),
+        ("HumanEval",     "humaneval", "pass_at_1", "%"),
+        ("FLORES chrF++", "flores",    "avg_chrf", ""),
+        ("FLORES BLEU",   "flores",    "avg_bleu", ""),
+    ]
+    for col, bm, field, suffix in candidates:
+        for _, s in summaries:
+            b = s.get("benchmarks", {}).get(bm, {})
+            if field in b:
+                seen.append((col, bm, field, suffix))
+                break
+    return seen
+
+
 def generate_report(out_path):
     model_dirs = discover()
     if not model_dirs:
-        print("No results found in outputs/. Run benchmark.py first.")
+        print(f"No results found in outputs/{BASE_NAME}-*. Run the benchmark script first.")
         return
 
     summaries = [(d, load_summary(d)) for d in model_dirs]
@@ -68,74 +95,57 @@ def generate_report(out_path):
     labels = [s["label"] for _, s in summaries]
     print(f"Building report for: {labels}")
 
-    lines = []
-    a = lines.append
+    quality_cols = collect_quality_columns(summaries)
 
-    a(f"# Granite 4.1 8B — Quantization Benchmark Report")
-    a(f"")
-    a(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    a(f"**Hardware**: Apple M5 Pro (MLX)")
-    a(f"**Base model**: ibm-granite/granite-4.1-8b")
-    a(f"")
-    a(f"---")
-    a(f"")
+    L = []
+    a = L.append
 
-    # ── Summary table ──────────────────────────────────────────────────────────
-    a(f"## Summary")
-    a(f"")
-    a(f"| Model | Disk (MB) | Prefill tok/s | Decode tok/s | Peak Mem (GB) | GSM8K | MMLU | HumanEval |")
-    a(f"|---|---:|---:|---:|---:|---:|---:|---:|")
+    a(f"# {DISPLAY_NAME} — Quantization Benchmark Report")
+    a("")
+    a(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}  ")
+    a("**Hardware**: Apple M5 Pro (MLX)  ")
+    a(f"**Base model**: [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO})")
+    a("")
+    a("---")
+    a("")
 
-    for d, s in summaries:
-        b  = s.get("benchmarks", {})
-        p  = s.get("perf", {})
-        disk = fmt(disk_size_mb(d.name))
-        a(
-            f"| {s['label']}"
-            f" | {disk}"
-            f" | {fmt(p.get('avg_prefill_tps'))}"
-            f" | {fmt(p.get('avg_decode_tps'))}"
-            f" | {fmt(p.get('peak_memory_gb'))}"
-            f" | {fmt(b.get('gsm8k', {}).get('accuracy'), '%')}"
-            f" | {fmt(b.get('mmlu', {}).get('accuracy'), '%')}"
-            f" | {fmt(b.get('humaneval', {}).get('pass_at_1'), '%')}"
-            f" |"
-        )
+    # ── Summary table ─────────────────────────────────────────────────────────
+    a("## Summary")
+    a("")
+    header = ["Model", "Disk (MB)", "Prefill tok/s", "Decode tok/s", "Peak Mem (GB)"]
+    align  = ["",      "---:",      "---:",          "---:",         "---:"]
+    for col, *_ in quality_cols:
+        header.append(col)
+        align.append("---:")
 
-    a(f"")
-    a(f"---")
-    a(f"")
-
-    # ── Performance ────────────────────────────────────────────────────────────
-    a(f"## Performance")
-    a(f"")
-    a(f"### Decode throughput per benchmark")
-    a(f"")
-    a(f"| Model | GSM8K tok/s | HumanEval tok/s | MMLU tok/s | Long-ctx tok/s |")
-    a(f"|---|---:|---:|---:|---:|")
+    a("| " + " | ".join(header) + " |")
+    a("|" + "|".join((["---"] if x == "" else [x]) for x in align).replace("[", "").replace("]", "").replace("'", "") + "|")
+    # Cleaner separator row:
+    L[-1] = "|" + "|".join((c if c else "---") for c in align) + "|"
 
     for d, s in summaries:
-        def avg_tps(name):
-            records = load_jsonl(d / f"{name}.jsonl")
-            if not records:
-                return None
-            return round(sum(r["generation_tps"] for r in records) / len(records), 1)
+        b = s.get("benchmarks", {})
+        p = s.get("perf", {})
+        row = [
+            s["label"],
+            fmt(disk_size_mb(d.name)),
+            fmt(p.get("avg_prefill_tps")),
+            fmt(p.get("avg_decode_tps")),
+            fmt(p.get("peak_memory_gb")),
+        ]
+        for _, bm, field, suffix in quality_cols:
+            row.append(fmt(b.get(bm, {}).get(field), suffix))
+        a("| " + " | ".join(str(x) for x in row) + " |")
 
-        a(
-            f"| {s['label']}"
-            f" | {fmt(avg_tps('gsm8k'))}"
-            f" | {fmt(avg_tps('humaneval'))}"
-            f" | {fmt(avg_tps('mmlu'))}"
-            f" | {fmt(avg_tps('long_context'))}"
-            f" |"
-        )
+    a("")
+    a("---")
+    a("")
 
-    a(f"")
-    a(f"### Context scaling (decode tok/s)")
-    a(f"")
-    a(f"| Model | ~128 tok | ~256 tok | ~512 tok | ~1024 tok |")
-    a(f"|---|---:|---:|---:|---:|")
-
+    # ── Context scaling ───────────────────────────────────────────────────────
+    a("## Context scaling (decode tok/s)")
+    a("")
+    a("| Model | ~128 tok | ~256 tok | ~512 tok | ~1024 tok |")
+    a("|---|---:|---:|---:|---:|")
     for d, s in summaries:
         ctx = s.get("context_scaling", [])
         vals = []
@@ -147,107 +157,82 @@ def generate_report(out_path):
         while len(vals) < 4:
             vals.append("—")
         a(f"| {s['label']} | {' | '.join(vals[:4])} |")
+    a("")
+    a("---")
+    a("")
 
-    a(f"")
-    a(f"---")
-    a(f"")
+    # ── Per-benchmark detail ─────────────────────────────────────────────────
+    benchmarks_present = set()
+    for _, s in summaries:
+        benchmarks_present.update(s.get("benchmarks", {}).keys())
 
-    # ── Quality ────────────────────────────────────────────────────────────────
-    a(f"## Quality")
-    a(f"")
-    a(f"### GSM8K — Math reasoning")
-    a(f"")
-    a(f"| Model | Accuracy | Correct | Total |")
-    a(f"|---|---:|---:|---:|")
+    if "gsm8k" in benchmarks_present or "mmlu" in benchmarks_present or "humaneval" in benchmarks_present:
+        a("## Quality detail")
+        a("")
+        if "gsm8k" in benchmarks_present:
+            a("### GSM8K")
+            a("")
+            a("| Model | Accuracy | n |")
+            a("|---|---:|---:|")
+            for d, s in summaries:
+                g = s.get("benchmarks", {}).get("gsm8k", {})
+                a(f"| {s['label']} | {fmt(g.get('accuracy'), '%')} | {fmt(g.get('n'))} |")
+            a("")
+        if "mmlu" in benchmarks_present:
+            a("### MMLU")
+            a("")
+            a("| Model | Accuracy | n |")
+            a("|---|---:|---:|")
+            for d, s in summaries:
+                g = s.get("benchmarks", {}).get("mmlu", {})
+                a(f"| {s['label']} | {fmt(g.get('accuracy'), '%')} | {fmt(g.get('n'))} |")
+            a("")
+        if "humaneval" in benchmarks_present:
+            a("### HumanEval")
+            a("")
+            a("| Model | pass@1 | Syntax OK | n |")
+            a("|---|---:|---:|---:|")
+            for d, s in summaries:
+                g = s.get("benchmarks", {}).get("humaneval", {})
+                a(f"| {s['label']} | {fmt(g.get('pass_at_1'), '%')} | {fmt(g.get('syntax_rate'), '%')} | {fmt(g.get('n'))} |")
+            a("")
+        a("---")
+        a("")
 
-    for d, s in summaries:
-        g = s.get("benchmarks", {}).get("gsm8k", {})
-        n = g.get("n", "—")
-        acc = g.get("accuracy")
-        correct = round(acc * n / 100) if acc and isinstance(n, int) else "—"
-        a(f"| {s['label']} | {fmt(acc, '%')} | {correct} | {n} |")
+    if "flores" in benchmarks_present:
+        a("## FLORES-200 translation quality")
+        a("")
+        a("| Model | Avg chrF++ | Avg BLEU | n |")
+        a("|---|---:|---:|---:|")
+        for d, s in summaries:
+            f_ = s.get("benchmarks", {}).get("flores", {})
+            a(f"| {s['label']} | {fmt(f_.get('avg_chrf'))} | {fmt(f_.get('avg_bleu'))} | {fmt(f_.get('n'))} |")
+        a("")
 
-    a(f"")
-    a(f"### MMLU — World knowledge")
-    a(f"")
-    a(f"| Model | Accuracy | Correct | Total |")
-    a(f"|---|---:|---:|---:|")
+        # Per-pair breakdown — collect union of pairs across summaries
+        all_pairs = []
+        seen = set()
+        for _, s in summaries:
+            for pp in s.get("benchmarks", {}).get("flores", {}).get("per_pair", []) or []:
+                if pp["pair"] not in seen:
+                    seen.add(pp["pair"])
+                    all_pairs.append(pp["pair"])
+        if all_pairs:
+            a("### chrF++ per direction")
+            a("")
+            a("| Model | " + " | ".join(all_pairs) + " |")
+            a("|---|" + "|".join(["---:"] * len(all_pairs)) + "|")
+            for d, s in summaries:
+                per = {pp["pair"]: pp for pp in s.get("benchmarks", {}).get("flores", {}).get("per_pair", []) or []}
+                row = [s["label"]]
+                for pair in all_pairs:
+                    row.append(fmt(per.get(pair, {}).get("chrf")))
+                a("| " + " | ".join(row) + " |")
+            a("")
+        a("---")
+        a("")
 
-    for d, s in summaries:
-        g = s.get("benchmarks", {}).get("mmlu", {})
-        n = g.get("n", "—")
-        acc = g.get("accuracy")
-        correct = round(acc * n / 100) if acc and isinstance(n, int) else "—"
-        a(f"| {s['label']} | {fmt(acc, '%')} | {correct} | {n} |")
-
-    a(f"")
-    a(f"### HumanEval — Code generation")
-    a(f"")
-    a(f"| Model | pass@1 | Syntax OK | Total |")
-    a(f"|---|---:|---:|---:|")
-
-    for d, s in summaries:
-        g = s.get("benchmarks", {}).get("humaneval", {})
-        a(
-            f"| {s['label']}"
-            f" | {fmt(g.get('pass_at_1'), '%')}"
-            f" | {fmt(g.get('syntax_rate'), '%')}"
-            f" | {fmt(g.get('n'))}"
-            f" |"
-        )
-
-    a(f"")
-    a(f"---")
-    a(f"")
-
-    # ── Failure analysis ───────────────────────────────────────────────────────
-    a(f"## Failure Analysis")
-    a(f"")
-    a(f"### GSM8K failures")
-    a(f"")
-
-    for d, s in summaries:
-        failures = [r for r in load_jsonl(d / "gsm8k.jsonl") if not r.get("correct")]
-        if not failures:
-            continue
-        a(f"**{s['label']}** — {len(failures)} failures")
-        a(f"")
-        for r in failures[:3]:
-            a(f"- Q: {r['question'][:80]}...")
-            a(f"  Gold: `{r['gold']}` | Predicted: `{r['predicted']}`")
-        if len(failures) > 3:
-            a(f"- *(+{len(failures)-3} more)*")
-        a(f"")
-
-    a(f"### HumanEval failures")
-    a(f"")
-
-    for d, s in summaries:
-        failures = [r for r in load_jsonl(d / "humaneval.jsonl") if not r.get("tests_passed")]
-        if not failures:
-            continue
-        a(f"**{s['label']}** — {len(failures)} failures")
-        a(f"")
-        for r in failures[:3]:
-            a(f"- {r['task_id']}: {r.get('error', '—')[:80]}")
-        if len(failures) > 3:
-            a(f"- *(+{len(failures)-3} more)*")
-        a(f"")
-
-    a(f"---")
-    a(f"")
-
-    # ── Recommendations ────────────────────────────────────────────────────────
-    a(f"## Recommendations")
-    a(f"")
-    a(f"| Use Case | Recommended | Reason |")
-    a(f"|---|---|---|")
-    a(f"| Max quality | 8bit | Closest to FP16 |")
-    a(f"| Best balance | 6bit | Good quality, ~2.5× faster than FP16 |")
-    a(f"| RAM-constrained | mixed4_6 | Better quality than uniform 4bit, similar size |")
-    a(f"| Minimum footprint | 4bit | Smallest disk + memory |")
-
-    report = "\n".join(lines)
+    report = "\n".join(L)
     with open(out_path, "w") as f:
         f.write(report)
     print(f"\nReport written → {out_path}")
@@ -255,6 +240,6 @@ def generate_report(out_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default=str(REPORTS_DIR / "final_benchmark.md"))
+    parser.add_argument("--out", default=str(REPORTS_DIR / f"{BASE_NAME}_benchmark.md"))
     args = parser.parse_args()
     generate_report(Path(args.out))

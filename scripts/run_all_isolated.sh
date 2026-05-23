@@ -15,6 +15,12 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MODELS_DIR="$PROJECT_DIR/models"
 COOLDOWN_SECONDS=120
 
+# Base name and benchmark script can be overridden via env so the same runner
+# works for different models / benchmark suites.
+#   MLX_BENCH_BASE_NAME=hy-mt2-7b MLX_BENCH_SCRIPT=scripts/flores_benchmark.py bash scripts/run_all_isolated.sh
+BENCH_SCRIPT="${MLX_BENCH_SCRIPT:-scripts/benchmark.py}"
+BASE_NAME="${MLX_BENCH_BASE_NAME:-granite-4.1-8b}"
+
 # ── activate venv ─────────────────────────────────────────────────────────────
 if [[ ! -d "$VENV" ]]; then
     echo "ERROR: venv not found at $VENV" >&2
@@ -27,7 +33,7 @@ cd "$PROJECT_DIR"
 
 # ── discover models ───────────────────────────────────────────────────────────
 MODELS=()
-for d in "$MODELS_DIR"/*/; do
+for d in "$MODELS_DIR"/${BASE_NAME}-*/; do
     [[ -d "$d" ]] && MODELS+=("${d%/}")
 done
 
@@ -51,14 +57,14 @@ for i in "${!MODELS[@]}"; do
     model_path="${MODELS[$i]}"
     model_name="$(basename "$model_path")"
     # Strip the "granite-4.1-8b-" prefix (if present) for a clean --label
-    label="${model_name#granite-4.1-8b-}"
+    label="${model_name#${BASE_NAME}-}"
 
     echo
     echo "================================================================"
     echo "[$((i+1))/${#MODELS[@]}] $model_name  (label: $label)"
     echo "================================================================"
 
-    python scripts/benchmark.py --model "$model_path" --label "$label"
+    python "$BENCH_SCRIPT" --model "$model_path" --label "$label"
 
     # Cooldown (skip after last model)
     if [[ $i -lt $((${#MODELS[@]} - 1)) ]]; then

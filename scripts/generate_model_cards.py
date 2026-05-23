@@ -1,114 +1,77 @@
 """
-Generate HuggingFace model cards (README.md) for each quantized model.
+Generate generic HuggingFace model cards (README.md) for quantized variants.
+
 Reads from outputs/<model>/summary.json and writes README.md into models/<model>/.
 
+The card is intentionally **task-agnostic**: it surfaces whatever benchmarks
+appear in the summary (e.g. gsm8k / humaneval / mmlu for reasoning models, or
+flores for translation models). For task-specific cards with curated copy,
+write a dedicated `generate_model_cards_<model>.py` alongside this one.
+
+Configuration is read from environment via `config.py`:
+  MLX_BENCH_BASE_NAME   e.g. granite-4.1-8b  / hy-mt2-7b
+  MLX_BENCH_HF_REPO     e.g. ibm-granite/granite-4.1-8b
+  MLX_BENCH_DISPLAY_NAME (optional, defaults to BASE_NAME)
+  MLX_BENCH_HF_AUTHOR   HF username for the published repos (default: sahilchachra)
+  MLX_BENCH_LICENSE     SPDX-style license tag for the card frontmatter (default: apache-2.0)
+
 Usage:
-  python scripts/generate_model_cards.py
+  MLX_BENCH_BASE_NAME=granite-4.1-8b python scripts/generate_model_cards.py
 """
 
 import json
-from datetime import datetime
+import os
 from pathlib import Path
+
+from config import BASE_NAME, BASE_HF_REPO, DISPLAY_NAME
 
 OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 MODELS_DIR  = Path(__file__).parent.parent / "models"
 
-AUTHOR      = "sahilchachra"
-BASE_MODEL  = "ibm-granite/granite-4.1-8b"
-BASE_LABEL  = "granite-4.1-8b-fp16"
+AUTHOR  = os.environ.get("MLX_BENCH_HF_AUTHOR", "sahilchachra")
+LICENSE = os.environ.get("MLX_BENCH_LICENSE", "apache-2.0")
 
-# All variants we publish — used for cross-links
-ALL_VARIANTS = [
-    ("4bit",      "Affine int4 (group 64)"),
-    ("5bit",      "Affine int5 (group 64)"),
-    ("6bit",      "Affine int6 (group 64)"),
-    ("8bit",      "Affine int8 (group 64)"),
-    ("mixed4_6",  "Mixed 4+6 bit"),
-    ("mxfp4",     "Block float MX FP4"),
-    ("mxfp8",     "Block float MX FP8"),
-]
+# Auto-discover which variants we have. fp16 (baseline) is skipped — we don't
+# republish the original — but is used as the comparison column.
+BASELINE_LABEL = "fp16"
 
-QUANT_DESCRIPTIONS = {
-    "4bit": {
-        "method": "Affine integer quantization",
-        "bits": "4-bit (4.5 bits/weight avg)",
-        "group_size": 64,
-        "description": (
-            "Standard affine (integer) quantization at 4-bit with group size 64. "
-            "Largest compression ratio of the uniform variants. "
-            "~3.9× smaller than FP16 with moderate quality tradeoff."
-        ),
-    },
-    "5bit": {
-        "method": "Affine integer quantization",
-        "bits": "5-bit (~5.5 bits/weight avg)",
-        "group_size": 64,
-        "description": (
-            "Affine quantization at 5-bit with group size 64. "
-            "Good middle ground between 4-bit compression and 6-bit quality."
-        ),
-    },
-    "6bit": {
-        "method": "Affine integer quantization",
-        "bits": "6-bit (~6.5 bits/weight avg)",
-        "group_size": 64,
-        "description": (
-            "Affine quantization at 6-bit with group size 64. "
-            "Best quality among the smaller uniform variants, recommended for general use."
-        ),
-    },
-    "8bit": {
-        "method": "Affine integer quantization",
-        "bits": "8-bit (~8.5 bits/weight avg)",
-        "group_size": 64,
-        "description": (
-            "Affine quantization at 8-bit with group size 64. "
-            "Closest to FP16 quality. Recommended when memory allows and quality is the priority."
-        ),
-    },
-    "mixed4_6": {
-        "method": "Mixed-bit quantization (mlx-lm predicate: mixed_4_6)",
-        "bits": "~4.77 bits/weight avg",
-        "group_size": 64,
-        "description": (
-            "Mixed-bit quantization where sensitive layers (embeddings, first/last transformer layers) "
-            "are kept at 6-bit while the remaining layers use 4-bit. "
-            "Achieves better quality than uniform 4-bit at nearly the same disk size (~4.8 GB vs ~4.5 GB)."
-        ),
-    },
-    "mxfp4": {
-        "method": "Block floating-point MX FP4 (microscaling)",
-        "bits": "~4 bits/weight",
-        "group_size": 32,
-        "description": (
-            "Microscaling (MX) block floating-point quantization at FP4 precision. "
-            "Uses a shared floating-point exponent per block of 32 weights instead of integer affine scaling. "
-            "Different numerical properties vs affine int4 — may suit different workloads."
-        ),
-    },
-    "mxfp8": {
-        "method": "Block floating-point MX FP8 (microscaling)",
-        "bits": "~8 bits/weight",
-        "group_size": 32,
-        "description": (
-            "Microscaling (MX) block floating-point quantization at FP8 precision. "
-            "Uses a shared floating-point exponent per block of 32 weights. "
-            "Compared to affine int8: same bit-width, different numerical format."
-        ),
-    },
+
+# Cross-link descriptions for common variants. Anything not in this map
+# falls back to a generic label like "Quantized variant: 5bit".
+VARIANT_DESCRIPTIONS = {
+    "4bit":     "Affine int4",
+    "5bit":     "Affine int5",
+    "6bit":     "Affine int6",
+    "8bit":     "Affine int8",
+    "mixed4_6": "Mixed 4+6 bit",
+    "mixed3_6": "Mixed 3+6 bit",
+    "mxfp4":    "Block float MX FP4",
+    "mxfp8":    "Block float MX FP8",
+    "nvfp4":    "Block float NV FP4",
 }
 
 
+def discover_variants():
+    """Find <BASE_NAME>-<label>/ folders in models/, excluding the baseline."""
+    if not MODELS_DIR.exists():
+        return []
+    variants = []
+    for d in sorted(MODELS_DIR.iterdir()):
+        if not d.is_dir() or not d.name.startswith(f"{BASE_NAME}-"):
+            continue
+        label = d.name[len(BASE_NAME) + 1:]
+        if label == BASELINE_LABEL:
+            continue
+        variants.append(label)
+    return variants
+
+
 def load_summary(label):
-    p = OUTPUTS_DIR / f"granite-4.1-8b-{label}" / "summary.json"
+    p = OUTPUTS_DIR / f"{BASE_NAME}-{label}" / "summary.json"
     if not p.exists():
         return None
     with open(p) as f:
         return json.load(f)
-
-
-def load_fp16_summary():
-    return load_summary("fp16")
 
 
 def fmt(v, suffix="", missing="N/A"):
@@ -116,175 +79,203 @@ def fmt(v, suffix="", missing="N/A"):
 
 
 def disk_size_mb(label):
-    p = MODELS_DIR / f"granite-4.1-8b-{label}"
+    p = MODELS_DIR / f"{BASE_NAME}-{label}"
     if not p.exists():
         return None
     return round(sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1024**2)
 
 
-def generate_card(label):
-    model_name = f"granite-4.1-8b-{label}"
+def render_quality_table(this, baseline):
+    """Render the benchmarks that exist in summary["benchmarks"]."""
+    b  = this.get("benchmarks", {}) if this else {}
+    fb = baseline.get("benchmarks", {}) if baseline else {}
+    rows = []
+
+    # GSM8K (accuracy %)
+    if "gsm8k" in b:
+        rows.append((
+            "GSM8K (math, accuracy)",
+            fmt(b["gsm8k"].get("accuracy"), "%"),
+            fmt(fb.get("gsm8k", {}).get("accuracy"), "%"),
+            b["gsm8k"].get("n"),
+        ))
+    # HumanEval (pass@1 %)
+    if "humaneval" in b:
+        rows.append((
+            "HumanEval (code, pass@1)",
+            fmt(b["humaneval"].get("pass_at_1"), "%"),
+            fmt(fb.get("humaneval", {}).get("pass_at_1"), "%"),
+            b["humaneval"].get("n"),
+        ))
+    # MMLU (accuracy %)
+    if "mmlu" in b:
+        rows.append((
+            "MMLU (knowledge, accuracy)",
+            fmt(b["mmlu"].get("accuracy"), "%"),
+            fmt(fb.get("mmlu", {}).get("accuracy"), "%"),
+            b["mmlu"].get("n"),
+        ))
+    # FLORES (avg chrF++ / BLEU)
+    if "flores" in b:
+        rows.append((
+            "FLORES-200 (translation, chrF++)",
+            fmt(b["flores"].get("avg_chrf")),
+            fmt(fb.get("flores", {}).get("avg_chrf")),
+            b["flores"].get("n"),
+        ))
+        rows.append((
+            "FLORES-200 (translation, BLEU)",
+            fmt(b["flores"].get("avg_bleu")),
+            fmt(fb.get("flores", {}).get("avg_bleu")),
+            b["flores"].get("n"),
+        ))
+
+    if not rows:
+        return ["_No quality benchmarks recorded for this variant._", ""]
+
+    lines = [
+        "| Benchmark | This model | FP16 baseline | n |",
+        "|---|---:|---:|---:|",
+    ]
+    for label, this_v, base_v, n in rows:
+        lines.append(f"| {label} | {this_v} | {base_v} | {fmt(n)} |")
+    return lines + [""]
+
+
+def render_perf_table(this, baseline, this_label):
+    p  = this.get("perf", {}) if this else {}
+    fp = baseline.get("perf", {}) if baseline else {}
+    return [
+        "| | This model | FP16 baseline |",
+        "|---|---:|---:|",
+        f"| Prefill (tok/s)  | {fmt(p.get('avg_prefill_tps'))} | {fmt(fp.get('avg_prefill_tps'))} |",
+        f"| Decode (tok/s)   | {fmt(p.get('avg_decode_tps'))}  | {fmt(fp.get('avg_decode_tps'))}  |",
+        f"| Peak memory (GB) | {fmt(p.get('peak_memory_gb'))} | {fmt(fp.get('peak_memory_gb'))} |",
+        f"| Disk size (MB)   | {fmt(disk_size_mb(this_label))} | {fmt(disk_size_mb(BASELINE_LABEL))} |",
+        "",
+    ]
+
+
+def render_context_scaling(this):
+    ctx = this.get("context_scaling", []) if this else []
+    if not ctx:
+        return []
+    lines = ["### Context scaling (decode tok/s)", "",
+             "| Context length | Decode tok/s |",
+             "|---:|---:|"]
+    for c in ctx:
+        if c.get("status") == "ok":
+            lines.append(f"| ~{c['target_tokens']} tokens | {c['generation_tps']:.1f} |")
+        else:
+            lines.append(f"| ~{c['target_tokens']} tokens | OOM |")
+    lines.append("")
+    return lines
+
+
+def render_card(label, all_variants):
+    model_name = f"{BASE_NAME}-{label}"
     repo_name  = f"{AUTHOR}/{model_name}-mlx"
-    qinfo      = QUANT_DESCRIPTIONS[label]
-    s          = load_summary(label)
-    fp16       = load_fp16_summary()
+    this       = load_summary(label)
+    baseline   = load_summary(BASELINE_LABEL)
     disk       = disk_size_mb(label)
+    variant_desc = VARIANT_DESCRIPTIONS.get(label, f"Quantized variant: {label}")
 
-    b  = s.get("benchmarks", {}) if s else {}
-    p  = s.get("perf", {}) if s else {}
-    fp = fp16.get("perf", {}) if fp16 else {}
-    fb = fp16.get("benchmarks", {}) if fp16 else {}
+    L = []
+    a = L.append
 
-    lines = []
-    a = lines.append
-
-    a(f"---")
-    a(f"language: en")
-    a(f"license: apache-2.0")
-    a(f"base_model: {BASE_MODEL}")
-    a(f"tags:")
-    a(f"  - mlx")
-    a(f"  - quantized")
-    a(f"  - granite")
-    a(f"  - apple-silicon")
-    a(f"---")
-    a(f"")
+    # Frontmatter
+    a("---")
+    a(f"license: {LICENSE}")
+    a(f"base_model: {BASE_HF_REPO}")
+    a("tags:")
+    a("  - mlx")
+    a("  - quantized")
+    a("  - apple-silicon")
+    a("---")
+    a("")
     a(f"# {model_name}-mlx")
-    a(f"")
-    a(f"Quantized version of [{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) for Apple Silicon using [MLX](https://github.com/ml-explore/mlx).")
-    a(f"")
-    a(f"**Quantization**: {qinfo['method']}  ")
-    a(f"**Precision**: {qinfo['bits']}  ")
-    a(f"**Group size**: {qinfo['group_size']}  ")
+    a("")
+    a(f"MLX quantization of [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO}) for Apple Silicon.")
+    a("")
+    a(f"**Variant**: {variant_desc}  ")
     a(f"**Disk size**: {fmt(disk, ' MB')}  ")
     a(f"**Quantized by**: [{AUTHOR}](https://huggingface.co/{AUTHOR})")
-    a(f"")
-    a(f"## About this variant")
-    a(f"")
-    a(f"{qinfo['description']}")
-    a(f"")
-    a(f"## Benchmark results")
-    a(f"")
-    a(f"Evaluated on Apple M5 Pro with MLX. All metrics measured in a single pass (model loaded once).")
-    a(f"")
+    a("")
 
-    # perf table
-    a(f"### Performance")
-    a(f"")
-    a(f"| | This model | FP16 baseline |")
-    a(f"|---|---:|---:|")
-    a(f"| Prefill (tok/s) | {fmt(p.get('avg_prefill_tps'))} | {fmt(fp.get('avg_prefill_tps'))} |")
-    a(f"| Decode (tok/s)  | {fmt(p.get('avg_decode_tps'))} | {fmt(fp.get('avg_decode_tps'))} |")
-    a(f"| Peak memory (GB)| {fmt(p.get('peak_memory_gb'))} | {fmt(fp.get('peak_memory_gb'))} |")
-    a(f"| Disk size (MB)  | {fmt(disk)} | {fmt(disk_size_mb('fp16'))} |")
-    a(f"")
+    a("## Benchmark results")
+    a("")
+    a("Evaluated on Apple M5 Pro with MLX. Model loaded once; performance and quality measured in a single pass.")
+    a("")
 
-    # quality table
-    a(f"### Quality")
-    a(f"")
-    a(f"| Benchmark | This model | FP16 baseline | Task |")
-    a(f"|---|---:|---:|---|")
-    gsm  = b.get("gsm8k", {})
-    fgsm = fb.get("gsm8k", {})
-    mmlu  = b.get("mmlu", {})
-    fmmlu = fb.get("mmlu", {})
-    he   = b.get("humaneval", {})
-    fhe  = fb.get("humaneval", {})
-    a(f"| GSM8K     | {fmt(gsm.get('accuracy'), '%')} | {fmt(fgsm.get('accuracy'), '%')} | Math reasoning (25 samples) |")
-    a(f"| MMLU      | {fmt(mmlu.get('accuracy'), '%')} | {fmt(fmmlu.get('accuracy'), '%')} | World knowledge (50 samples) |")
-    a(f"| HumanEval | {fmt(he.get('pass_at_1'), '%')} | {fmt(fhe.get('pass_at_1'), '%')} | Code pass@1 (20 samples) |")
-    a(f"")
+    a("### Performance")
+    a("")
+    L.extend(render_perf_table(this, baseline, label))
 
-    # context scaling
-    ctx = s.get("context_scaling", []) if s else []
-    if ctx:
-        a(f"### Context scaling (decode tok/s)")
-        a(f"")
-        a(f"| Context length | Decode tok/s |")
-        a(f"|---:|---:|")
-        for c in ctx:
-            if c.get("status") == "ok":
-                a(f"| ~{c['target_tokens']} tokens | {c['generation_tps']:.1f} |")
-            else:
-                a(f"| ~{c['target_tokens']} tokens | OOM |")
-        a(f"")
+    a("### Quality")
+    a("")
+    L.extend(render_quality_table(this, baseline))
 
-    # usage
-    a(f"## Usage")
-    a(f"")
-    a(f"### Install")
-    a(f"")
-    a(f"```bash")
-    a(f"pip install mlx-lm")
-    a(f"```")
-    a(f"")
-    a(f"### Generate")
-    a(f"")
-    a(f"```python")
-    a(f"from mlx_lm import load, generate")
-    a(f"")
-    a(f"model, tokenizer = load(\"{repo_name}\")")
-    a(f"response = generate(model, tokenizer, prompt=\"Your prompt here\", max_tokens=512, verbose=True)")
-    a(f"```")
-    a(f"")
-    a(f"### Stream")
-    a(f"")
-    a(f"```python")
-    a(f"from mlx_lm import load, stream_generate")
-    a(f"")
-    a(f"model, tokenizer = load(\"{repo_name}\")")
-    a(f"for chunk in stream_generate(model, tokenizer, prompt=\"Your prompt here\", max_tokens=512):")
-    a(f"    print(chunk.text, end=\"\", flush=True)")
-    a(f"```")
-    a(f"")
+    L.extend(render_context_scaling(this))
 
-    # all variants
-    a(f"## All variants in this collection")
-    a(f"")
-    a(f"| Model | Method | Bits/weight |")
-    a(f"|---|---|---|")
-    for v_label, v_desc in ALL_VARIANTS:
-        marker = " ← this model" if v_label == label else ""
-        a(f"| [{AUTHOR}/granite-4.1-8b-{v_label}-mlx](https://huggingface.co/{AUTHOR}/granite-4.1-8b-{v_label}-mlx) | {v_desc} |{marker} |")
-    a(f"")
+    # Usage
+    a("## Usage")
+    a("")
+    a("```bash")
+    a("pip install mlx-lm")
+    a("```")
+    a("")
+    a("```python")
+    a("from mlx_lm import load, generate")
+    a("")
+    a(f'model, tokenizer = load("{repo_name}")')
+    a('response = generate(model, tokenizer, prompt="Your prompt here", max_tokens=256, verbose=True)')
+    a("```")
+    a("")
 
-    a(f"## Notes")
-    a(f"")
-    a(f"- Requires Apple Silicon (M1 or later) with MLX")
-    a(f"- Benchmarks run on Apple M5 Pro, 24 GB unified memory")
-    a(f"- Sample sizes are small (25–50 per benchmark) — treat accuracy figures as indicative, not definitive")
-    a(f"- Base model license: [Apache 2.0](https://huggingface.co/{BASE_MODEL}/blob/main/LICENSE)")
-    a(f"")
-    a(f"## Original model")
-    a(f"")
-    a(f"See [{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) for full model details, training information, and intended use.")
+    # Cross-links
+    if all_variants:
+        a("## All variants in this collection")
+        a("")
+        a("| Model | Variant |")
+        a("|---|---|")
+        for v in all_variants:
+            desc = VARIANT_DESCRIPTIONS.get(v, v)
+            marker = " ← this model" if v == label else ""
+            a(f"| [{AUTHOR}/{BASE_NAME}-{v}-mlx](https://huggingface.co/{AUTHOR}/{BASE_NAME}-{v}-mlx) | {desc}{marker} |")
+        a("")
 
-    return "\n".join(lines)
+    a("## Notes")
+    a("")
+    a("- Requires Apple Silicon (M1 or later) with MLX")
+    a("- Benchmarks run on Apple M5 Pro, 24 GB unified memory")
+    a(f"- License: see [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO}) for the original model's license")
+    a("")
+    a("## Original model")
+    a("")
+    a(f"See [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO}) for full model details and intended use.")
+
+    return "\n".join(L)
 
 
 if __name__ == "__main__":
-    generated = []
-    missing_results = []
+    variants = discover_variants()
+    if not variants:
+        print(f"No quantized variants found under models/{BASE_NAME}-*")
+        raise SystemExit(1)
 
-    for label, _ in ALL_VARIANTS:
-        model_dir = MODELS_DIR / f"granite-4.1-8b-{label}"
-        if not model_dir.exists():
-            print(f"  SKIP {label} — model folder not found")
-            continue
+    print(f"Base name : {BASE_NAME}")
+    print(f"Base repo : {BASE_HF_REPO}")
+    print(f"Variants  : {variants}")
+    print()
 
-        s = load_summary(label)
-        if not s:
-            missing_results.append(label)
-            print(f"  WARN {label} — no benchmark results yet, card will show N/A")
-
-        card = generate_card(label)
-        out_path = model_dir / "README.md"
-        with open(out_path, "w") as f:
+    written = []
+    for label in variants:
+        model_dir = MODELS_DIR / f"{BASE_NAME}-{label}"
+        card = render_card(label, variants)
+        out = model_dir / "README.md"
+        with open(out, "w") as f:
             f.write(card)
-        print(f"  ✓  {label} → {out_path}")
-        generated.append(label)
+        print(f"  ✓ {label} → {out}")
+        written.append(label)
 
-    print(f"\nGenerated {len(generated)} model cards.")
-    if missing_results:
-        print(f"Missing results (N/A placeholders): {missing_results}")
-        print("Re-run after benchmarks finish to fill in the numbers.")
+    print(f"\nGenerated {len(written)} model cards.")
