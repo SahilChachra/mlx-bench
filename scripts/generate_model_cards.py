@@ -139,7 +139,24 @@ def render_quality_table(this, baseline):
     ]
     for label, this_v, base_v, n in rows:
         lines.append(f"| {label} | {this_v} | {base_v} | {fmt(n)} |")
-    return lines + [""]
+    lines.append("")
+
+    # Optional per-pair FLORES breakdown when present
+    per_pair = b.get("flores", {}).get("per_pair") if "flores" in b else None
+    fb_pairs = {p["pair"]: p for p in fb.get("flores", {}).get("per_pair", [])} if "flores" in fb else {}
+    if per_pair:
+        lines += [
+            "#### FLORES-200 per-pair chrF++",
+            "",
+            "| Direction | This model | FP16 baseline | n |",
+            "|---|---:|---:|---:|",
+        ]
+        for p in per_pair:
+            base_chrf = fb_pairs.get(p["pair"], {}).get("chrf")
+            lines.append(f"| {p['pair']} | {fmt(p.get('chrf'))} | {fmt(base_chrf)} | {fmt(p.get('n'))} |")
+        lines.append("")
+
+    return lines
 
 
 def render_perf_table(this, baseline, this_label):

@@ -21,24 +21,21 @@ export MLX_BENCH_DISPLAY_NAME="Granite 4.1 8B"        # human label (optional)
 
 That base name flows through everything: model folders (`models/${BASE_NAME}-{4bit,8bit,...}`), result folders (`outputs/${BASE_NAME}-...`), HF repo names (`<author>/${BASE_NAME}-<variant>-mlx`), and report titles.
 
-### Convention: special-case scripts for non-standard models
+### Picking the benchmark suite
 
-The generic scripts handle anything that fits the default "load → prompt → score" flow. For models that need a different evaluation (e.g. a translation model needs FLORES, not GSM8K), add a sibling script:
-
-| Generic script | Special-case example |
-|---|---|
-| `scripts/benchmark.py` (GSM8K/HumanEval/MMLU)       | `scripts/flores_benchmark.py` (FLORES-200 chrF/BLEU) |
-| `scripts/generate_model_cards.py` (auto-discovers benchmarks) | `scripts/generate_model_cards_hymt2.py` (curated copy for Hy-MT2) |
-| `scripts/run_pipeline.sh` (full default flow)       | `scripts/run_hymt2_overnight.sh` (overnight one-shot) |
-
-Choose which benchmark script the runner uses via `MLX_BENCH_SCRIPT`:
+Select which benchmark script the runner uses via `MLX_BENCH_SCRIPT`:
 
 ```bash
+# Text generation (GSM8K / HumanEval / MMLU — default)
+export MLX_BENCH_SCRIPT="scripts/benchmark.py"
+
+# Translation (FLORES-200 chrF++ / BLEU)
 export MLX_BENCH_SCRIPT="scripts/flores_benchmark.py"
-bash scripts/run_all_isolated.sh
 ```
 
-The generic `generate_model_cards.py` and `generate_report.py` auto-detect which benchmarks each `summary.json` contains and only render the columns that have data — so a model evaluated only on FLORES won't show empty GSM8K columns, and vice versa.
+`generate_model_cards.py` and `generate_report.py` auto-detect which benchmarks each `summary.json` contains and only render the columns that have data — a model evaluated only on FLORES won't show empty GSM8K columns, and vice versa. When per-pair FLORES data is present, the card includes a per-direction chrF++ table automatically.
+
+If your model needs a fundamentally different evaluation, add a new `scripts/<name>_benchmark.py` that writes a `summary.json` with the same shape (`benchmarks`, `perf`, `context_scaling`) — the cards/report will pick it up.
 
 ---
 
@@ -168,6 +165,8 @@ Override the HF author via `MLX_BENCH_HF_AUTHOR` (default: `sahilchachra`).
 
 ## End-to-end pipeline
 
+`run_pipeline.sh` does: dataset setup → FP16 baseline benchmark → quantize → benchmark each variant (isolated processes) → generate model cards → write report → optionally push to HF.
+
 ```bash
 source .venv/bin/activate
 
@@ -177,15 +176,18 @@ export MLX_BENCH_HF_REPO="ibm-granite/granite-4.1-8b"
 bash scripts/run_pipeline.sh
 ```
 
-For a translation model:
+For a translation model (FLORES) with mxfp4/mxfp8 variants and HF publish:
 
 ```bash
 export MLX_BENCH_BASE_NAME="hy-mt2-7b"
 export MLX_BENCH_HF_REPO="tencent/Hy-MT2-7B"
 export MLX_BENCH_SCRIPT="scripts/flores_benchmark.py"
+export HF_TOKEN="..."
 
-bash scripts/run_pipeline.sh --bits "4 8" --skip-fp16
+bash scripts/run_pipeline.sh --bits "4 8" --q-modes "mxfp4 mxfp8" --skip-fp16 --push
 ```
+
+Flags: `--bits "<list>"`, `--q-modes "<list>"`, `--mixed "<recipe>"`, `--skip-fp16`, `--push`.
 
 ---
 
@@ -221,11 +223,9 @@ bash scripts/run_pipeline.sh --bits "4 8" --skip-fp16
     ├── flores_benchmark.py          # Translation benchmark (FLORES-200)
     ├── generate_report.py           # Auto-discovering comparison report
     ├── generate_model_cards.py      # Auto-discovering generic HF cards
-    ├── generate_model_cards_<X>.py  # Optional: curated cards per model
     ├── push_to_hf.py                # Publish quantized models to HF
-    ├── run_pipeline.sh              # Full default pipeline
-    ├── run_all_isolated.sh          # One isolated process per model
-    └── run_<X>_overnight.sh         # Optional: full overnight one-shot per model
+    ├── run_pipeline.sh              # Full pipeline (quantize → bench → cards → report → push)
+    └── run_all_isolated.sh          # One isolated process per model variant
 ```
 
 ---
