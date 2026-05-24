@@ -1,36 +1,41 @@
 """
-Generate HuggingFace model cards (README.md) for Hy-MT2-7B MLX variants.
+Generate HuggingFace model cards (README.md) for Hy-MT2 MLX variants.
 
-Reads outputs/<model>/summary.json (FLORES + perf) and writes README.md
-into models/<model>/.
+Works for any Hy-MT2 size (7B, 1.8B, ...). Configuration comes from env via
+scripts/config.py:
+
+  MLX_BENCH_BASE_NAME    e.g. hy-mt2-7b / hy-mt2-1.8b
+  MLX_BENCH_HF_REPO      e.g. tencent/Hy-MT2-7B / tencent/Hy-MT2-1.8B
+  MLX_BENCH_DISPLAY_NAME e.g. "Hy-MT2-7B" / "Hy-MT2-1.8B"
+
+Variants are auto-discovered from models/<BASE_NAME>-<label>/ folders
+(excluding fp16). Reads outputs/<model>/summary.json and writes README.md
+into the model folder.
 
 Usage:
-  python scripts/generate_model_cards_hymt2.py
+  MLX_BENCH_BASE_NAME=hy-mt2-1.8b MLX_BENCH_HF_REPO=tencent/Hy-MT2-1.8B \
+    python scripts/generate_model_cards_hymt2.py
 """
 
 import json
+import os
 from pathlib import Path
+
+from config import BASE_NAME, BASE_HF_REPO, DISPLAY_NAME
 
 OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
 MODELS_DIR  = Path(__file__).parent.parent / "models"
 
-AUTHOR      = "sahilchachra"
-BASE_NAME   = "hy-mt2-7b"
+AUTHOR      = os.environ.get("MLX_BENCH_HF_AUTHOR", "sahilchachra")
 BASE_LABEL  = "fp16"
-BASE_MODEL  = "tencent/Hy-MT2-7B"
-DISPLAY     = "Hy-MT2-7B"
 
-# Variants we publish — used for cross-links
-ALL_VARIANTS = [
-    ("4bit", "Affine int4 (group 64)"),
-    ("8bit", "Affine int8 (group 64)"),
-]
-
+# Per-variant descriptive text — keyed by label suffix
 QUANT_DESCRIPTIONS = {
     "4bit": {
         "method": "Affine integer quantization",
         "bits": "4-bit (~4.5 bits/weight avg)",
         "group_size": 64,
+        "short": "Affine int4 (group 64)",
         "description": (
             "Standard affine (integer) quantization at 4-bit with group size 64. "
             "Largest compression ratio — recommended when memory is tight or you "
@@ -41,13 +46,62 @@ QUANT_DESCRIPTIONS = {
         "method": "Affine integer quantization",
         "bits": "8-bit (~8.5 bits/weight avg)",
         "group_size": 64,
+        "short": "Affine int8 (group 64)",
         "description": (
             "Affine quantization at 8-bit with group size 64. "
             "Closest to FP16 translation quality. Recommended when memory allows "
             "and translation accuracy is the priority."
         ),
     },
+    "mxfp4": {
+        "method": "Block floating-point MX FP4 (microscaling)",
+        "bits": "~4 bits/weight",
+        "group_size": 32,
+        "short": "Block float MX FP4",
+        "description": (
+            "Microscaling (MX) block floating-point quantization at FP4 precision. "
+            "Uses a shared floating-point exponent per block of 32 weights instead "
+            "of integer affine scaling — different numerical properties vs affine int4."
+        ),
+    },
+    "mxfp8": {
+        "method": "Block floating-point MX FP8 (microscaling)",
+        "bits": "~8 bits/weight",
+        "group_size": 32,
+        "short": "Block float MX FP8",
+        "description": (
+            "Microscaling (MX) block floating-point quantization at FP8 precision. "
+            "Shared floating-point exponent per block of 32 weights — same bit-width "
+            "as int8 but a different numerical format."
+        ),
+    },
+    "mixed4_6": {
+        "method": "Mixed-bit quantization (mlx-lm predicate: mixed_4_6)",
+        "bits": "~4.77 bits/weight avg",
+        "group_size": 64,
+        "short": "Mixed 4+6 bit",
+        "description": (
+            "Mixed-bit quantization: sensitive layers (embeddings, first/last layers) "
+            "at 6-bit, the rest at 4-bit. Better quality than uniform 4-bit at nearly "
+            "the same size."
+        ),
+    },
 }
+
+
+def discover_variants():
+    """List <label> for every models/<BASE_NAME>-<label>/ folder (excluding fp16)."""
+    out = []
+    if not MODELS_DIR.exists():
+        return out
+    for d in sorted(MODELS_DIR.iterdir()):
+        if not d.is_dir() or not d.name.startswith(f"{BASE_NAME}-"):
+            continue
+        label = d.name[len(BASE_NAME) + 1:]
+        if label == BASE_LABEL:
+            continue
+        out.append(label)
+    return out
 
 
 def load_summary(label):
@@ -69,7 +123,7 @@ def disk_size_mb(label):
     return round(sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1024**2)
 
 
-def generate_card(label):
+def generate_card(label, all_variants):
     model_name = f"{BASE_NAME}-{label}"
     repo_name  = f"{AUTHOR}/{model_name}-mlx"
     qinfo      = QUANT_DESCRIPTIONS[label]
@@ -99,7 +153,7 @@ def generate_card(label):
     a("  - pt")
     a("  - it")
     a("license: other")
-    a(f"base_model: {BASE_MODEL}")
+    a(f"base_model: {BASE_HF_REPO}")
     a("pipeline_tag: translation")
     a("tags:")
     a("  - mlx")
@@ -111,9 +165,9 @@ def generate_card(label):
     a("")
     a(f"# {model_name}-mlx")
     a("")
-    a(f"Quantized version of [{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) for Apple Silicon using [MLX](https://github.com/ml-explore/mlx).")
+    a(f"Quantized version of [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO}) for Apple Silicon using [MLX](https://github.com/ml-explore/mlx).")
     a("")
-    a(f"{DISPLAY} is Tencent's multilingual translation model covering 40+ languages.")
+    a(f"{DISPLAY_NAME} is Tencent's multilingual translation model covering 40+ languages.")
     a("")
     a(f"**Quantization**: {qinfo['method']}  ")
     a(f"**Precision**: {qinfo['bits']}  ")
@@ -213,7 +267,8 @@ def generate_card(label):
     a("")
     a("| Model | Method |")
     a("|---|---|")
-    for v_label, v_desc in ALL_VARIANTS:
+    for v_label in all_variants:
+        v_desc = QUANT_DESCRIPTIONS.get(v_label, {}).get("short", v_label)
         marker = " ← this model" if v_label == label else ""
         a(f"| [{AUTHOR}/{BASE_NAME}-{v_label}-mlx](https://huggingface.co/{AUTHOR}/{BASE_NAME}-{v_label}-mlx) | {v_desc}{marker} |")
     a("")
@@ -223,31 +278,47 @@ def generate_card(label):
     a("- Requires Apple Silicon (M1 or later) with MLX")
     a("- Benchmarks run on Apple M5 Pro, 24 GB unified memory")
     a("- FLORES-200 sample sizes are small — treat chrF/BLEU figures as indicative, not definitive")
-    a(f"- License: see [{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) for the original model's license terms")
+    a(f"- License: see [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO}) for the original model's license terms")
     a("")
     a("## Original model")
     a("")
-    a(f"See [{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) for full model details, supported languages, and intended use.")
+    a(f"See [{BASE_HF_REPO}](https://huggingface.co/{BASE_HF_REPO}) for full model details, supported languages, and intended use.")
 
     return "\n".join(lines)
 
 
 if __name__ == "__main__":
+    all_variants = discover_variants()
+    if not all_variants:
+        print(f"No quantized variants found under models/{BASE_NAME}-*")
+        raise SystemExit(1)
+
+    print(f"Base name : {BASE_NAME}")
+    print(f"HF repo   : {BASE_HF_REPO}")
+    print(f"Variants  : {all_variants}")
+    print()
+
     generated = []
     missing_results = []
 
-    for label, _ in ALL_VARIANTS:
+    for label in all_variants:
         model_dir = MODELS_DIR / f"{BASE_NAME}-{label}"
-        if not model_dir.exists():
-            print(f"  SKIP {label} — model folder not found")
-            continue
+        if label not in QUANT_DESCRIPTIONS:
+            print(f"  WARN {label} — no QUANT_DESCRIPTIONS entry; using generic copy")
+            QUANT_DESCRIPTIONS[label] = {
+                "method": f"Quantization ({label})",
+                "bits": label,
+                "group_size": "?",
+                "short": label,
+                "description": f"Quantized variant: {label}.",
+            }
 
         s = load_summary(label)
         if not s:
             missing_results.append(label)
             print(f"  WARN {label} — no benchmark results yet, card will show N/A")
 
-        card = generate_card(label)
+        card = generate_card(label, all_variants)
         out_path = model_dir / "README.md"
         with open(out_path, "w") as f:
             f.write(card)
