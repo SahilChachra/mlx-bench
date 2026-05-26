@@ -17,10 +17,12 @@ from pathlib import Path
 
 from huggingface_hub import HfApi
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import BASE_NAME
 
-MODELS_DIR = Path(__file__).parent.parent / "models"
-REPORTS_DIR = Path(__file__).parent.parent / "reports"
+_REPO = Path(__file__).resolve().parents[2]
+MODELS_DIR  = _REPO / "models"
+REPORTS_DIR = _REPO / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
 AUTHOR     = "sahilchachra"

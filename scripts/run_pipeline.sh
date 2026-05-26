@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Legacy bash entry point — kept for back-compat. Prefer:
+#   python -m scripts.pipeline {quantize,bench,card,report,push,all} ...
+#
 # Full pipeline: setup → FP16 baseline → quantize → benchmark → cards → report → (push)
 #
 # Generic over any base model — set these env vars before running:
@@ -46,7 +49,7 @@ if [[ -z "${MLX_BENCH_BASE_NAME:-}" || -z "${MLX_BENCH_HF_REPO:-}" ]]; then
     exit 1
 fi
 
-BENCH_SCRIPT="${MLX_BENCH_SCRIPT:-scripts/benchmark.py}"
+BENCH_SCRIPT="${MLX_BENCH_SCRIPT:-scripts/benchmarks/runner.py}"
 DISPLAY="${MLX_BENCH_DISPLAY_NAME:-$MLX_BENCH_BASE_NAME}"
 
 echo "=================================================="
@@ -66,7 +69,7 @@ cd "$ROOT"
 
 # 1. Datasets (idempotent — skip if you don't need text-generation evals)
 echo "[1/4] Setting up datasets..."
-python scripts/setup_datasets.py || echo "  (setup_datasets failed or skipped — OK if your benchmark script doesn't need them)"
+python -m scripts.benchmarks.setup_datasets || echo "  (setup_datasets failed or skipped — OK if your benchmark script doesn't need them)"
 
 # 2. FP16 baseline
 if [ "$SKIP_FP16" = false ]; then
@@ -85,7 +88,7 @@ QUANT_ARGS=()
 [[ -n "$Q_MODES" ]] && QUANT_ARGS+=(--q-mode $Q_MODES)
 [[ -n "$MIXED"   ]] && QUANT_ARGS+=(--mixed $MIXED)
 if [[ ${#QUANT_ARGS[@]} -gt 0 ]]; then
-  python scripts/quantize.py "${QUANT_ARGS[@]}" --verify
+  python -m scripts.quantization.affine "${QUANT_ARGS[@]}" --verify
 else
   echo "  (no quantization targets specified — skipping)"
 fi
@@ -98,11 +101,11 @@ MLX_BENCH_SCRIPT="$BENCH_SCRIPT" bash scripts/run_all_isolated.sh
 # Cards + Report
 echo ""
 echo "[Cards] Generating HuggingFace model cards..."
-python scripts/generate_model_cards.py || echo "  (card generation skipped — no variants?)"
+python -m scripts.publish.cards || echo "  (card generation skipped — no variants?)"
 
 echo ""
 echo "[Report] Generating final benchmark report..."
-python scripts/generate_report.py
+python -m scripts.publish.report
 
 # Optional push to HF
 if [ "$PUSH" = true ]; then
@@ -111,7 +114,7 @@ if [ "$PUSH" = true ]; then
   if [[ -z "${HF_TOKEN:-}" ]]; then
     echo "  ERROR: HF_TOKEN not set — skipping push"
   else
-    python scripts/push_to_hf.py
+    python -m scripts.publish.push
   fi
 fi
 

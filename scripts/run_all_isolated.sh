@@ -18,7 +18,7 @@ COOLDOWN_SECONDS=120
 # Base name and benchmark script can be overridden via env so the same runner
 # works for different models / benchmark suites.
 #   MLX_BENCH_BASE_NAME=hy-mt2-7b MLX_BENCH_SCRIPT=scripts/flores_benchmark.py bash scripts/run_all_isolated.sh
-BENCH_SCRIPT="${MLX_BENCH_SCRIPT:-scripts/benchmark.py}"
+BENCH_SCRIPT="${MLX_BENCH_SCRIPT:-scripts/benchmarks/runner.py}"
 BASE_NAME="${MLX_BENCH_BASE_NAME:-granite-4.1-8b}"
 
 # ── activate venv ─────────────────────────────────────────────────────────────
@@ -32,8 +32,14 @@ source "$VENV/bin/activate"
 cd "$PROJECT_DIR"
 
 # ── discover models ───────────────────────────────────────────────────────────
+# FP16 first so we know the model is healthy before burning compute on quants.
 MODELS=()
+if [[ -d "$MODELS_DIR/${BASE_NAME}-fp16" ]]; then
+    MODELS+=("$MODELS_DIR/${BASE_NAME}-fp16")
+fi
 for d in "$MODELS_DIR"/${BASE_NAME}-*/; do
+    name="$(basename "${d%/}")"
+    [[ "$name" == "${BASE_NAME}-fp16" ]] && continue
     [[ -d "$d" ]] && MODELS+=("${d%/}")
 done
 
@@ -90,5 +96,5 @@ echo "All ${#MODELS[@]} models benchmarked in ${HOURS}h ${MINUTES}m"
 echo "================================================================"
 echo "Results in: $PROJECT_DIR/outputs/"
 echo "Next steps:"
-echo "  python scripts/generate_model_cards.py"
-echo "  python scripts/generate_report.py"
+echo "  python -m scripts.publish.cards"
+echo "  python -m scripts.publish.report"

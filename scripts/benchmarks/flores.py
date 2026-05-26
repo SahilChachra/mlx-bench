@@ -19,9 +19,10 @@ import mlx.core as mx
 import sacrebleu
 from mlx_lm import load, stream_generate
 
-DATASETS_DIR = Path(__file__).parent.parent / "datasets"
+_REPO = Path(__file__).resolve().parents[2]
+DATASETS_DIR = _REPO / "datasets"
 FLORES_DIR   = DATASETS_DIR / "flores200_dataset" / "devtest"
-OUTPUTS_DIR  = Path(__file__).parent.parent / "outputs"
+OUTPUTS_DIR  = _REPO / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
 DATASETS_DIR.mkdir(exist_ok=True)
 

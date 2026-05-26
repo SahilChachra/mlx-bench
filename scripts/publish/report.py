@@ -11,14 +11,17 @@ Usage:
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import BASE_NAME, BASE_HF_REPO, DISPLAY_NAME
 
-OUTPUTS_DIR = Path(__file__).parent.parent / "outputs"
-REPORTS_DIR = Path(__file__).parent.parent / "reports"
-MODELS_DIR  = Path(__file__).parent.parent / "models"
+_REPO = Path(__file__).resolve().parents[2]
+OUTPUTS_DIR = _REPO / "outputs"
+REPORTS_DIR = _REPO / "reports"
+MODELS_DIR  = _REPO / "models"
 REPORTS_DIR.mkdir(exist_ok=True)
 
 SORT_ORDER = ["fp16", "8bit", "mxfp8", "6bit", "5bit", "mixed4_6", "4bit", "mxfp4"]

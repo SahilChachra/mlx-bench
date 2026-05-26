@@ -24,9 +24,10 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import BASE_NAME
 
-MODELS_DIR = Path(__file__).parent.parent / "models"
+MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 BASE_MODEL = str(MODELS_DIR / f"{BASE_NAME}-fp16")
 
