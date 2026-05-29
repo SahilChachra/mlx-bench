@@ -449,7 +449,7 @@ def run_math500(model, tokenizer, label):
         user_msg = MATH500_PROMPT.format(problem=s["problem"])
         prompt = format_chat(tokenizer, user_msg)
         mx.clear_cache()
-        text, resp = run(model, tokenizer, prompt, max_tokens=4096)
+        text, resp = run(model, tokenizer, prompt, max_tokens=8192)
 
         finished = "</think>" in text.lower()
         answer_text = strip_thinking(text) if finished else ""
@@ -594,7 +594,7 @@ def run_ifeval(model, tokenizer, label):
         # model writes the response directly — same as the official IFEval setup.
         prompt = format_chat(tokenizer, s["prompt"], enable_thinking=False)
         mx.clear_cache()
-        text, resp = run(model, tokenizer, prompt, max_tokens=1024)
+        text, resp = run(model, tokenizer, prompt, max_tokens=2048)
 
         response = strip_thinking(text).strip()
         passed = _score_ifeval(s["rule"], response, s.get("kwargs", {}))

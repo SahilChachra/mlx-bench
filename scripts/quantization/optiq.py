@@ -64,12 +64,12 @@ def main():
 
     cmd = [
         "optiq", "convert",
-        "--model", BASE_MODEL,
+        BASE_MODEL,
         "--output", str(out),
         "--target-bpw", str(args.target_bpw),
         "--candidate-bits", args.candidate_bits,
         "--group-size", str(args.group_size),
-        "--calibration", args.calibration,
+        "--calibration-mix", args.calibration,
     ]
     if args.extra:
         cmd.extend(args.extra)

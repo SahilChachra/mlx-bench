@@ -106,6 +106,22 @@ def render_optiq_section(label):
     ]
     lines = [l for l in lines if l != ""]  # drop empty
     lines.append("")
+    # If many components are MoE gates or conv layers, the *quantized-weight*
+    # bpw above does not equal the overall on-disk bpw — unquantized layers
+    # (conv, embeddings on some archs) still take their FP16 share. Surface
+    # the gap when it's significant.
+    if per_layer:
+        is_lfm_like = any("conv" in k.lower() or "feed_forward" in k.lower() for k in per_layer)
+        if is_lfm_like:
+            lines.append(
+                "> **Note on architecture**: this base model mixes attention/MLP blocks with "
+                "convolutional / state-space blocks. OptiQ's per-layer sweep only ranks the "
+                "attention + feed-forward weights — the conv blocks stay at their original "
+                "precision. The achieved bits/weight above is the average over the *quantized* "
+                "components; the on-disk model size is correspondingly larger than a fully-"
+                "quantized model at the same target bpw would be."
+            )
+            lines.append("")
 
     # Per-layer histogram
     if per_layer:
@@ -116,15 +132,15 @@ def render_optiq_section(label):
                 continue
             hist[int(b)] = hist.get(int(b), 0) + 1
         if hist:
+            total = sum(hist.values())
             lines += [
                 "### Per-layer bit allocation",
                 "",
-                "169 model components total. OptiQ allocated bits non-uniformly based on KL sensitivity:",
+                f"{total} quantizable components total. OptiQ allocated bits non-uniformly based on KL sensitivity:",
                 "",
                 "| Bits | Components | Share |",
                 "|---:|---:|---:|",
             ]
-            total = sum(hist.values())
             for b in sorted(hist.keys(), reverse=True):
                 pct = hist[b] / total * 100
                 lines.append(f"| {b}-bit | {hist[b]} | {pct:.1f}% |")
@@ -133,7 +149,7 @@ def render_optiq_section(label):
             # Which layers got the top tier?
             top_bit = max(hist.keys())
             top_layers = [k for k, v in per_layer.items() if isinstance(v, dict) and v.get("bits") == top_bit]
-            if top_layers and len(top_layers) <= 25:
+            if top_layers and len(top_layers) <= 30:
                 lines += [
                     f"**Components kept at {top_bit}-bit** (most sensitive to quantization):",
                     "",
@@ -141,7 +157,17 @@ def render_optiq_section(label):
                 for lk in top_layers:
                     lines.append(f"- `{lk}`")
                 lines.append("")
-                lines.append("Notice the pattern: `lm_head`, the **first** transformer block, and the **last** transformer block — these layers carry the most information that downstream tokens depend on, so OptiQ preserves them at high precision while compressing the middle of the network more aggressively.")
+                # Narrative — adapt to what was actually preserved
+                names = " ".join(top_layers).lower()
+                has_lmhead = "lm_head" in names
+                has_first_block = any(".0." in n or ".layers.0." in n for n in top_layers)
+                has_gates = "feed_forward.gate" in names or ".gate" in names
+                if has_lmhead and has_first_block:
+                    lines.append("Notice the pattern: `lm_head`, the **first** transformer block, and the **last** transformer block — these layers carry the most information that downstream tokens depend on, so OptiQ preserves them at high precision while compressing the middle of the network more aggressively.")
+                elif has_gates:
+                    lines.append("Notice the pattern: the **MoE feed-forward gates** dominate the top tier. Gate weights pick which experts run for every token — small numerical drift here changes routing decisions and compounds through the rest of the network, so OptiQ pays the bits to keep them precise while compressing the experts themselves more aggressively.")
+                else:
+                    lines.append(f"The top-tier components above are the layers whose outputs are most sensitive to quantization on this model — OptiQ preserves them at {top_bit}-bit while compressing the rest of the network more aggressively.")
                 lines.append("")
     return lines
 

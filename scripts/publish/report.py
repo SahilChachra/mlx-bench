@@ -72,9 +72,11 @@ def collect_quality_columns(summaries):
     """Return list of (column_label, benchmark_key, field, suffix) found in any summary."""
     seen = []
     candidates = [
+        ("MATH-500",      "math500",   "accuracy", "%"),
+        ("HumanEval",     "humaneval", "pass_at_1", "%"),
+        ("IFEval",        "ifeval",    "accuracy", "%"),
         ("GSM8K",         "gsm8k",     "accuracy", "%"),
         ("MMLU",          "mmlu",      "accuracy", "%"),
-        ("HumanEval",     "humaneval", "pass_at_1", "%"),
         ("FLORES chrF++", "flores",    "avg_chrf", ""),
         ("FLORES BLEU",   "flores",    "avg_bleu", ""),
     ]
@@ -122,9 +124,7 @@ def generate_report(out_path):
         align.append("---:")
 
     a("| " + " | ".join(header) + " |")
-    a("|" + "|".join((["---"] if x == "" else [x]) for x in align).replace("[", "").replace("]", "").replace("'", "") + "|")
-    # Cleaner separator row:
-    L[-1] = "|" + "|".join((c if c else "---") for c in align) + "|"
+    a("|" + "|".join((c if c else "---") for c in align) + "|")
 
     for d, s in summaries:
         b = s.get("benchmarks", {})
