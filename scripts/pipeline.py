@@ -28,6 +28,9 @@ from pathlib import Path
 PY = sys.executable
 REPO = Path(__file__).resolve().parents[1]
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import BASE_NAME, BASE_HF_REPO, MODALITY
+
 
 def run(cmd):
     print("→", " ".join(cmd))
@@ -85,6 +88,7 @@ def cmd_all(args, rest):
 
 
 def main():
+    print(f"[pipeline] modality={MODALITY}  base={BASE_NAME}  repo={BASE_HF_REPO}")
     ap = argparse.ArgumentParser(prog="pipeline")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

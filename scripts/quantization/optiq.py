@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import BASE_NAME
+from config import BASE_NAME, MODALITY
 
 REPO = Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO / "models"
@@ -47,6 +47,9 @@ def promote_optiq_mixed(out_dir: Path):
 
 
 def main():
+    if MODALITY == "vlm":
+        sys.exit("OptiQ is mlx-lm only — no VLM support upstream yet. "
+                 "Use affine / mxfp4 / mxfp8 for VLM workflows.")
     ap = argparse.ArgumentParser()
     ap.add_argument("--target-bpw", type=float, required=True)
     ap.add_argument("--candidate-bits", default="3,4,6,8")

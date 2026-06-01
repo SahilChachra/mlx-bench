@@ -48,6 +48,46 @@ python -m scripts.pipeline card
 HF_TOKEN=... python -m scripts.pipeline push --only optiq-5bpw
 ```
 
+### Vision-language models (VLMs)
+
+The same pipeline drives mlx-vlm when `MLX_BENCH_MODALITY=vlm`. mlx-vlm
+supports affine 4/6/8-bit, mxfp4, mxfp8, and mixed recipes (`mixed_4_6`,
+`mixed_3_6`, etc.) — but **not** DWQ or OptiQ.
+
+VLM workflows live in a **separate venv** (`requirements-vlm.txt`) because
+mlx-vlm pulls in fastapi/torchvision/pydantic that don't belong in the
+LLM venv, and some VLM model branches require older `transformers`
+versions that conflict with the mlx-lm pins.
+
+```bash
+uv venv ~/venv/mlx-vlm --python 3.12
+source ~/venv/mlx-vlm/bin/activate
+uv pip install -r requirements-vlm.txt
+
+# Example: nvidia/LocateAnything-3B — substitute any mlx-vlm-supported repo
+export MLX_BENCH_MODALITY=vlm
+export MLX_BENCH_BASE_NAME=locateanything-3b
+export MLX_BENCH_HF_REPO=nvidia/LocateAnything-3B
+export MLX_BENCH_DISPLAY_NAME="LocateAnything 3B"
+
+# Quantize directly from HF (no local FP16 download needed for VLM)
+python -m scripts.pipeline quantize --method affine --q-mode mxfp4
+
+# Text benchmarks run on the LM tower (image=None passed internally)
+python -m scripts.benchmarks.runner --model "models/${MLX_BENCH_BASE_NAME}-mxfp4" --label mxfp4
+
+# Grounding benchmark (RefCOCOg val). Flags below are tuned for LocateAnything;
+# adjust --prompt / --generation-mode for other VLMs.
+python -m scripts.benchmarks.refcoco \
+    --model "models/${MLX_BENCH_BASE_NAME}-mxfp4" --label mxfp4 --n 200 \
+    --register-locateanything
+```
+
+The text suites (HumanEval/IFEval/MATH-500/MMLU/long-context) all drive
+the LM tower text-only. `refcoco.py` is the first grounding-aware suite;
+its defaults match NVIDIA's recommendation for LocateAnything but
+`--prompt` / `--generation-mode` are exposed for other VLMs.
+
 ---
 
 ## Repo layout
@@ -98,6 +138,7 @@ HF_TOKEN=... python -m scripts.pipeline push --only optiq-5bpw
 | `MLX_BENCH_BASE_NAME`    | `granite-4.1-8b` | All scripts (folder + repo naming) |
 | `MLX_BENCH_HF_REPO`      | `ibm-granite/granite-4.1-8b` | quantize, report, cards |
 | `MLX_BENCH_DISPLAY_NAME` | `$BASE_NAME` | report / card title |
+| `MLX_BENCH_MODALITY`     | `llm` | `llm` or `vlm` — routes loader/quantize through mlx-lm or mlx-vlm |
 | `MLX_BENCH_SCRIPT`       | `scripts/benchmarks/runner.py` | `run_all_isolated.sh`, `run_pipeline.sh` |
 | `MLX_BENCH_HF_AUTHOR`    | `sahilchachra` | cards.py, push.py |
 | `MLX_BENCH_LICENSE`      | `apache-2.0` | cards.py (frontmatter) |

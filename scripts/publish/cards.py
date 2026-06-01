@@ -25,14 +25,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import BASE_NAME, BASE_HF_REPO, DISPLAY_NAME
+from config import BASE_NAME, BASE_HF_REPO, DISPLAY_NAME, MODALITY
 
 _REPO = Path(__file__).resolve().parents[2]
 OUTPUTS_DIR = _REPO / "outputs"
 MODELS_DIR  = _REPO / "models"
 
 AUTHOR  = os.environ.get("MLX_BENCH_HF_AUTHOR", "sahilchachra")
-LICENSE = os.environ.get("MLX_BENCH_LICENSE", "apache-2.0")
+LICENSE       = os.environ.get("MLX_BENCH_LICENSE", "apache-2.0")
+LICENSE_NAME  = os.environ.get("MLX_BENCH_LICENSE_NAME")  # used when LICENSE == "other"
+LICENSE_LINK  = os.environ.get("MLX_BENCH_LICENSE_LINK")
 
 # Auto-discover which variants we have. fp16 (baseline) is skipped — we don't
 # republish the original — but is used as the comparison column.
@@ -265,6 +267,29 @@ def render_quality_table(this, baseline, extra=None, extra_label=None):
             fmt(fb.get("mmlu", {}).get("accuracy"), "%"),
             b["mmlu"].get("n"),
         ))
+    # RefCOCOg (single-instance referring-expression grounding, Acc@0.5 / Acc@0.75 / mean IoU)
+    if "refcoco" in b:
+        rows.append((
+            "RefCOCOg (grounding, Acc@0.5)",
+            fmt(b["refcoco"].get("accuracy"), "%"),
+            fmt(eb.get("refcoco", {}).get("accuracy"), "%") if have_extra else None,
+            fmt(fb.get("refcoco", {}).get("accuracy"), "%"),
+            b["refcoco"].get("n"),
+        ))
+        rows.append((
+            "RefCOCOg (grounding, Acc@0.75)",
+            fmt(b["refcoco"].get("accuracy_75"), "%"),
+            fmt(eb.get("refcoco", {}).get("accuracy_75"), "%") if have_extra else None,
+            fmt(fb.get("refcoco", {}).get("accuracy_75"), "%"),
+            b["refcoco"].get("n"),
+        ))
+        rows.append((
+            "RefCOCOg (grounding, mean IoU)",
+            fmt(b["refcoco"].get("mean_iou")),
+            fmt(eb.get("refcoco", {}).get("mean_iou")) if have_extra else None,
+            fmt(fb.get("refcoco", {}).get("mean_iou")),
+            b["refcoco"].get("n"),
+        ))
     # FLORES (avg chrF++ / BLEU)
     if "flores" in b:
         rows.append((
@@ -385,17 +410,20 @@ def render_perf_table(this, baseline, this_label, extra=None, extra_label=None, 
             fmt(ess.get('prompt_tps')) if have_extra else "",
             fmt(fss.get('prompt_tps')),
         ))
-    rows.append(row(
-        "Decode tok/s (avg, long traces)",
-        fmt(p.get('avg_decode_tps')),
-        fmt(ep.get('avg_decode_tps')) if have_extra else "",
-        fmt(fp.get('avg_decode_tps')),
-    ))
+    # Long-trace decode_tps comes from runner.py (LLM workflow); not present
+    # for VLM runs. Only render the row if at least one variant has it.
+    if any(d.get('avg_decode_tps') is not None for d in (p, ep, fp) if d):
+        rows.append(row(
+            "Decode tok/s (avg, long traces)",
+            fmt(p.get('avg_decode_tps')),
+            fmt(ep.get('avg_decode_tps')) if have_extra else "",
+            fmt(fp.get('avg_decode_tps')),
+        ))
     rows.append(row(
         "Peak memory (GB)",
-        fmt(p.get('peak_memory_gb')),
-        fmt(ep.get('peak_memory_gb')) if have_extra else "",
-        fmt(fp.get('peak_memory_gb')),
+        fmt(p.get('peak_memory_gb') or ss.get('peak_memory_gb')),
+        fmt(ep.get('peak_memory_gb') or ess.get('peak_memory_gb')) if have_extra else "",
+        fmt(fp.get('peak_memory_gb') or fss.get('peak_memory_gb')),
     ))
     rows.append(row(
         "Disk size (MB)",
@@ -446,6 +474,10 @@ def render_card(label, all_variants):
     # Frontmatter
     a("---")
     a(f"license: {LICENSE}")
+    if LICENSE == "other" and LICENSE_NAME:
+        a(f"license_name: {LICENSE_NAME}")
+    if LICENSE == "other" and LICENSE_LINK:
+        a(f"license_link: {LICENSE_LINK}")
     a(f"base_model: {BASE_HF_REPO}")
     a("tags:")
     a("  - mlx")
@@ -464,6 +496,13 @@ def render_card(label, all_variants):
     a(f"**Disk size**: {fmt(disk, ' MB')}  ")
     a(f"**Quantized by**: [{AUTHOR}](https://huggingface.co/{AUTHOR})")
     a("")
+    if MODALITY == "vlm":
+        a("> **Note on effective bpw**: mlx-vlm's quantizers only act on the")
+        a("> language tower's linear weights. The vision encoder and embeddings")
+        a("> stay at the source dtype (bf16), so the headline variant name")
+        a("> reflects the LM-tower quantization while the on-disk size averages")
+        a("> the two halves of the model.")
+        a("")
 
     # OptiQ explainer + bit allocation
     if is_optiq:
@@ -531,16 +570,39 @@ def render_card(label, all_variants):
     # Usage
     a("## Usage")
     a("")
-    a("```bash")
-    a("pip install mlx-lm")
-    a("```")
-    a("")
-    a("```python")
-    a("from mlx_lm import load, generate")
-    a("")
-    a(f'model, tokenizer = load("{repo_name}")')
-    a('response = generate(model, tokenizer, prompt="Your prompt here", max_tokens=256, verbose=True)')
-    a("```")
+    if MODALITY == "vlm":
+        is_locateanything = "locateanything" in BASE_HF_REPO.lower()
+        a("```bash")
+        a("pip install mlx-vlm")
+        a("```")
+        a("")
+        a("```python")
+        a("from mlx_vlm import load, generate")
+        a("")
+        a(f'model, processor = load("{repo_name}")')
+        a('response = generate(model, processor, prompt="Describe this image.",')
+        a('                    image="path/to/image.jpg", max_tokens=256, verbose=True)')
+        a("```")
+        a("")
+        if is_locateanything:
+            a("> **Heads-up for LocateAnything**: mlx-vlm support currently lives in a")
+            a("> pull request and the released package doesn't have it. Until the PR")
+            a("> merges, the install + a small registration workaround are needed for")
+            a("> both `mlx_vlm.load(...)` and the CLI to work — see the [base model")
+            a(f"> page](https://huggingface.co/{BASE_HF_REPO}) and the mlx-bench README for the")
+            a("> full snippet.")
+            a("")
+    else:
+        a("```bash")
+        a("pip install mlx-lm")
+        a("```")
+        a("")
+        a("```python")
+        a("from mlx_lm import load, generate")
+        a("")
+        a(f'model, tokenizer = load("{repo_name}")')
+        a('response = generate(model, tokenizer, prompt="Your prompt here", max_tokens=256, verbose=True)')
+        a("```")
     a("")
 
     # Cross-links

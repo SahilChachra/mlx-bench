@@ -74,6 +74,9 @@ def collect_quality_columns(summaries):
     candidates = [
         ("MATH-500",      "math500",   "accuracy", "%"),
         ("HumanEval",     "humaneval", "pass_at_1", "%"),
+        ("RefCOCOg Acc@0.5",  "refcoco",   "accuracy",    "%"),
+        ("RefCOCOg Acc@0.75", "refcoco",   "accuracy_75", "%"),
+        ("RefCOCOg mean IoU", "refcoco",   "mean_iou",    ""),
         ("IFEval",        "ifeval",    "accuracy", "%"),
         ("GSM8K",         "gsm8k",     "accuracy", "%"),
         ("MMLU",          "mmlu",      "accuracy", "%"),
@@ -129,12 +132,13 @@ def generate_report(out_path):
     for d, s in summaries:
         b = s.get("benchmarks", {})
         p = s.get("perf", {})
+        ss = p.get("steady_state") or {}
         row = [
             s["label"],
             fmt(disk_size_mb(d.name)),
-            fmt(p.get("avg_prefill_tps")),
-            fmt(p.get("avg_decode_tps")),
-            fmt(p.get("peak_memory_gb")),
+            fmt(p.get("avg_prefill_tps") or ss.get("prompt_tps")),
+            fmt(p.get("avg_decode_tps") or ss.get("decode_tps")),
+            fmt(p.get("peak_memory_gb") or ss.get("peak_memory_gb")),
         ]
         for _, bm, field, suffix in quality_cols:
             row.append(fmt(b.get(bm, {}).get(field), suffix))

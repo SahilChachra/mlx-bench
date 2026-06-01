@@ -18,3 +18,7 @@ import os
 BASE_NAME    = os.environ.get("MLX_BENCH_BASE_NAME", "granite-4.1-8b")
 BASE_HF_REPO = os.environ.get("MLX_BENCH_HF_REPO",   "ibm-granite/granite-4.1-8b")
 DISPLAY_NAME = os.environ.get("MLX_BENCH_DISPLAY_NAME", BASE_NAME)
+
+MODALITY = os.environ.get("MLX_BENCH_MODALITY", "llm").lower()
+if MODALITY not in {"llm", "vlm"}:
+    raise ValueError(f"MLX_BENCH_MODALITY must be 'llm' or 'vlm', got {MODALITY!r}")

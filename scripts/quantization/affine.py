@@ -25,14 +25,22 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import BASE_NAME
+from config import BASE_NAME, BASE_HF_REPO, MODALITY
 
 MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
 MODELS_DIR.mkdir(exist_ok=True)
-BASE_MODEL = str(MODELS_DIR / f"{BASE_NAME}-fp16")
+# LLM workflow expects a local FP16 dir; VLM workflow points mlx-vlm directly
+# at the HF repo (mlx-vlm fetches and converts in one pass).
+BASE_MODEL = BASE_HF_REPO if MODALITY == "vlm" else str(MODELS_DIR / f"{BASE_NAME}-fp16")
 
 ALL_BITS        = [4, 5, 6, 8]
 DEFAULT_GROUP   = 64
+
+# Backend selection — both expose `convert` with --hf-path / --mlx-path /
+# -q / --q-bits / --q-group-size / --q-mode / --quant-predicate.
+_CONVERT_MOD = "mlx_vlm" if MODALITY == "vlm" else "mlx_lm"
+# Many VLMs (e.g. LocateAnything) declare auto_map → custom modeling code.
+_EXTRA_CONVERT_FLAGS = ["--trust-remote-code"] if MODALITY == "vlm" else []
 
 
 def _run(cmd, output_path):
@@ -68,7 +76,8 @@ def quantize_uniform(bits, group=DEFAULT_GROUP, upload_prefix=None):
     print(f"{'='*60}")
 
     cmd = [
-        sys.executable, "-m", "mlx_lm", "convert",
+        sys.executable, "-m", _CONVERT_MOD, "convert",
+        *_EXTRA_CONVERT_FLAGS,
         "--hf-path", BASE_MODEL,
         "--mlx-path", str(output_path),
         "-q", "--q-bits", str(bits),
@@ -91,7 +100,8 @@ def quantize_mixed(recipe, upload_prefix=None):
     print(f"{'='*60}")
 
     cmd = [
-        sys.executable, "-m", "mlx_lm", "convert",
+        sys.executable, "-m", _CONVERT_MOD, "convert",
+        *_EXTRA_CONVERT_FLAGS,
         "--hf-path", BASE_MODEL,
         "--mlx-path", str(output_path),
         "-q", "--quant-predicate", f"mixed_{recipe}",
@@ -114,7 +124,8 @@ def quantize_mode(mode, upload_prefix=None):
     print(f"{'='*60}")
 
     cmd = [
-        sys.executable, "-m", "mlx_lm", "convert",
+        sys.executable, "-m", _CONVERT_MOD, "convert",
+        *_EXTRA_CONVERT_FLAGS,
         "--hf-path", BASE_MODEL,
         "--mlx-path", str(output_path),
         "-q", "--q-mode", mode,
@@ -128,12 +139,19 @@ def quantize_mode(mode, upload_prefix=None):
 
 
 def verify(model_path):
-    from mlx_lm import load, generate
     print(f"\nVerifying {model_path.name}...")
     try:
-        model, tokenizer = load(str(model_path))
-        response = generate(model, tokenizer, prompt="Hello, briefly introduce yourself.", max_tokens=50, verbose=False)
-        print(f"  OK — {response[:100]}")
+        if MODALITY == "vlm":
+            from mlx_vlm import load, generate
+            model, processor = load(str(model_path))
+            response = generate(model, processor, prompt="Hello, briefly introduce yourself.",
+                                image=None, max_tokens=50, verbose=False)
+        else:
+            from mlx_lm import load, generate
+            model, tokenizer = load(str(model_path))
+            response = generate(model, tokenizer, prompt="Hello, briefly introduce yourself.",
+                                max_tokens=50, verbose=False)
+        print(f"  OK — {str(response)[:100]}")
         return True
     except Exception as e:
         print(f"  FAIL — {e}")

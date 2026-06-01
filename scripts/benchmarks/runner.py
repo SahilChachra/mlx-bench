@@ -15,7 +15,10 @@ import time
 from pathlib import Path
 
 import mlx.core as mx
-from mlx_lm import load, stream_generate
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.loader import load_model as load, text_stream_generate as stream_generate
 
 _REPO = Path(__file__).resolve().parents[2]
 DATASETS_DIR = _REPO / "datasets"

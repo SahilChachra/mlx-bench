@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import BASE_NAME
+from config import BASE_NAME, MODALITY
 
 REPO = Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO / "models"
@@ -24,6 +24,9 @@ BASE_MODEL = str(MODELS_DIR / f"{BASE_NAME}-fp16")
 
 
 def main():
+    if MODALITY == "vlm":
+        sys.exit("DWQ is mlx-lm only — no VLM support upstream yet. "
+                 "Use affine / mxfp4 / mxfp8 for VLM workflows.")
     ap = argparse.ArgumentParser()
     ap.add_argument("--bits", type=int, default=4)
     ap.add_argument("--group-size", type=int, default=64)
